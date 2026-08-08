@@ -1,0 +1,13 @@
+[Unit]
+Description=FRP Client for Mock Teamcenter (mocktc.bjlzc.cn)
+After=network-online.target mocktc.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/home/orae7p/frp_0.61.2_linux_amd64/frpc -c /home/orae7p/frp_0.61.2_linux_amd64/frpc-mocktc.toml
+Restart=on-failure
+RestartSec=5s
+
+[Install]
+WantedBy=multi-user.target

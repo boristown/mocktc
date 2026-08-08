@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ service }}{% endblock %} - MockTC</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="topbar">
+    <div class="container topbar-inner">
+      <a class="brand" href="/">
+        <span class="brand-mark">TC</span>
+        <span class="brand-text">
+          <strong>MockTC</strong>
+          <small>{{ service }}</small>
+        </span>
+      </a>
+      <nav class="nav">
+        <a href="/" class="{{ 'active' if active == 'home' }}">首页</a>
+        <a href="/api" class="{{ 'active' if active == 'api' }}">API 文档</a>
+        <a href="/logs" class="{{ 'active' if active == 'logs' }}">接口日志</a>
+        <a href="/data" class="{{ 'active' if active == 'data' }}">数据浏览</a>
+      </nav>
+    </div>
+  </header>
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="footer">
+    <div class="container">
+      Mock Teamcenter {{ version }} · 仅用于接口测试，非真实 Siemens Teamcenter 系统
+    </div>
+  </footer>
+</body>
+</html>

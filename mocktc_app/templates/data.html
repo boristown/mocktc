@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}数据浏览{% endblock %}
+{% block content %}
+<section class="panel">
+  <h2>物料数据（Items）</h2>
+  <p>点击物料可查看其 BOM 结构树；"原始 JSON" 直接打开 REST 接口返回。</p>
+  <table class="table">
+    <thead>
+      <tr><th>物料编号</th><th>名称</th><th>类型</th><th>版本</th><th>状态</th><th>BOM 行数</th><th>操作</th></tr>
+    </thead>
+    <tbody>
+      {% for item in items %}
+      <tr>
+        <td><code>{{ item.item_id }}</code></td>
+        <td>{{ item.item_name }}</td>
+        <td>{{ item.item_type }}</td>
+        <td>{% set rev = item.revision or '' %}{{ rev }}</td>
+        <td>{{ item.status }}</td>
+        <td>{{ item.bom_count }}</td>
+        <td class="actions">
+          <a class="btn btn-sm" href="/data/item/{{ item.uid }}">查看 BOM</a>
+          <a class="btn btn-sm" href="{{ api_prefix }}/items/{{ item.uid }}/bom/expand" target="_blank">原始 JSON</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

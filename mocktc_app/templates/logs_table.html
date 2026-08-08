@@ -1,0 +1,50 @@
+<div class="log-meta">共 {{ total }} 条记录 · 第 {{ page }} / {{ pages }} 页</div>
+<table class="table logs">
+  <thead>
+    <tr>
+      <th>时间</th><th>方法</th><th>路径</th><th>状态</th><th>耗时</th><th>IP</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for row in rows %}
+    <tr class="log-row" data-id="{{ row.id }}">
+      <td class="nowrap">{{ row.ts }}</td>
+      <td><span class="m m-{{ row.method|lower }}">{{ row.method }}</span></td>
+      <td><code>{{ row.path }}</code>{% if row.query %}<div class="q">{{ row.query }}</div>{% endif %}</td>
+      <td><span class="status s-{{ row.status // 100 }}">{{ row.status }}</span></td>
+      <td class="nowrap">{{ '%.1f' % row.duration_ms }} ms</td>
+      <td class="nowrap">{{ row.client_ip }}</td>
+      <td><button class="btn btn-xs toggle-body" data-id="{{ row.id }}">展开</button></td>
+    </tr>
+    <tr class="log-body" id="body-{{ row.id }}" hidden>
+      <td colspan="7">
+        <div class="body-grid">
+          <div>
+            <h4>请求体</h4>
+            <pre>{{ row.request_body or '(空)' }}</pre>
+            <h4>User-Agent</h4>
+            <pre>{{ row.user_agent or '(空)' }}</pre>
+          </div>
+          <div>
+            <h4>响应体</h4>
+            <pre>{{ row.response_body or '(空)' }}</pre>
+          </div>
+        </div>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" class="empty">暂无接口调用记录。先调用一个 REST 接口试试。</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% if pages > 1 %}
+<div class="pager">
+  {% if page > 1 %}
+  <a class="btn btn-sm" href="/logs/table?page={{ page - 1 }}&path={{ path }}&status={{ status }}&method={{ method }}">上一页</a>
+  {% endif %}
+  <span>第 {{ page }} / {{ pages }} 页</span>
+  {% if page < pages %}
+  <a class="btn btn-sm" href="/logs/table?page={{ page + 1 }}&path={{ path }}&status={{ status }}&method={{ method }}">下一页</a>
+  {% endif %}
+</div>
+{% endif %}

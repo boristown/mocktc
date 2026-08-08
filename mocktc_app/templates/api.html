@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}API 文档{% endblock %}
+{% block content %}
+<section class="panel">
+  <h2>RESTful 接口文档</h2>
+  <p>基础路径：<code>{{ api_prefix }}</code>，返回格式统一为
+     <code>{"status": &lt;HTTP状态码&gt;, "message": "OK", "data": {...}}</code>。</p>
+  <p>数据以 Teamcenter 风格的 UID 标识（如 <code>item-p1000</code>、<code>bl-p1000-1</code>），
+     可用物料编号查询后获取 UID，再查询 BOM 结构。</p>
+</section>
+
+<section class="panel">
+  <h2>接口一览</h2>
+  <table class="table">
+    <thead>
+      <tr><th>方法</th><th>路径</th><th>说明</th><th>主要参数</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><span class="m m-get">GET</span></td><td><code>{{ api_prefix }}/health</code></td><td>健康检查</td><td>-</td></tr>
+      <tr><td><span class="m m-get">GET</span></td><td><code>{{ api_prefix }}/items</code></td><td>物料列表 / 搜索</td><td>item_id, q, item_type, project, status, limit, offset</td></tr>
+      <tr><td><span class="m m-post">POST</span></td><td><code>{{ api_prefix }}/items</code></td><td>创建物料（测试用）</td><td>JSON body</td></tr>
+      <tr><td><span class="m m-get">GET</span></td><td><code>{{ api_prefix }}/items/&lt;uid&gt;</code></td><td>物料详情</td><td>-</td></tr>
+      <tr><td><span class="m m-get">GET</span></td><td><code>{{ api_prefix }}/items/&lt;uid&gt;/revisions</code></td><td>物料版本列表</td><td>-</td></tr>
+      <tr><td><span class="m m-get">GET</span></td><td><code>{{ api_prefix }}/items/&lt;uid&gt;/revisions/&lt;rev_uid&gt;</code></td><td>版本详情</td><td>-</td></tr>
+      <tr><td><span class="m m-get">GET</span></td><td><code>{{ api_prefix }}/items/&lt;uid&gt;/bom</code></td><td>BOM 结构（单层）</td><td>depth=0 默认，depth=-1 全展开</td></tr>
+      <tr><td><span class="m m-get">GET</span></td><td><code>{{ api_prefix }}/items/&lt;uid&gt;/bom/expand</code></td><td>BOM 全展开（多层）</td><td>-</td></tr>
+      <tr><td><span class="m m-get">GET</span></td><td><code>{{ api_prefix }}/structures/&lt;item_uid&gt;</code></td><td>BOM 结构别名接口</td><td>depth=0 默认</td></tr>
+      <tr><td><span class="m m-get">GET</span></td><td><code>{{ api_prefix }}/bomlines/&lt;uid&gt;</code></td><td>BOM 行详情</td><td>-</td></tr>
+      <tr><td><span class="m m-get">GET</span></td><td><code>{{ api_prefix }}/bomlines/&lt;uid&gt;/children</code></td><td>BOM 行的子行</td><td>depth=0 默认</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <h2>示例</h2>
+  <h3>1. 搜索物料</h3>
+  <pre class="codeblock"><code>curl "{{ api_prefix }}/items?q=变速箱"</code></pre>
+  <h3>2. 查询单层 BOM</h3>
+  <pre class="codeblock"><code>curl "{{ api_prefix }}/items/item-p1000/bom?depth=0"</code></pre>
+  <h3>3. 查询完整 BOM（多级展开）</h3>
+  <pre class="codeblock"><code>curl "{{ api_prefix }}/items/item-p1000/bom/expand"</code></pre>
+  <h3>4. 按物料编号直接获取 BOM</h3>
+  <pre class="codeblock"><code>curl "{{ api_prefix }}/structures/item-p1000?depth=-1"</code></pre>
+  <h3>5. 创建物料</h3>
+  <pre class="codeblock"><code>curl -X POST "{{ api_prefix }}/items" -H "Content-Type: application/json" -d '{
+  "item_id": "TEST-001",
+  "item_name": "测试零件",
+  "item_type": "Part",
+  "project": "XM-MOCK",
+  "revision_id": "A"
+}'</code></pre>
+</section>
+{% endblock %}

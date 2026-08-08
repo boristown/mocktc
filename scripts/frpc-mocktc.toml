@@ -1,0 +1,11 @@
+serverAddr = "39.104.206.210"
+serverPort = 7000
+# auth.token 由 deploy.sh 从已有 FRP 配置自动填充，不写入 Git
+auth.token = "@@FRP_AUTH_TOKEN@@"
+
+[[proxies]]
+name = "mocktc"
+type = "tcp"
+localIP = "127.0.0.1"
+localPort = 18120
+remotePort = 18120

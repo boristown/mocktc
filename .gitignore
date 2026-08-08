@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+mocktc_app/data/*.db
+mocktc_app/data/*.db-*
+.venv/

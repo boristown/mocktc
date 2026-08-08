@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}首页{% endblock %}
+{% block content %}
+<section class="hero">
+  <h1>轻量级 Siemens Teamcenter 模拟服务</h1>
+  <p>为外部系统（如 ECC）提供 Teamcenter 风格 RESTful BOM 接口用于联调测试。
+     所有接口调用都会记录到接口日志，可通过界面实时查看。</p>
+  <div class="hero-actions">
+    <a class="btn btn-primary" href="/api">查看 API 文档</a>
+    <a class="btn" href="/logs">查看接口日志</a>
+    <a class="btn" href="/data">浏览 BOM 数据</a>
+  </div>
+</section>
+
+<section class="cards">
+  <div class="card">
+    <div class="card-num">{{ counts.items }}</div>
+    <div class="card-label">物料（Items）</div>
+  </div>
+  <div class="card">
+    <div class="card-num">{{ counts.bom_lines }}</div>
+    <div class="card-label">BOM 行（BOM Lines）</div>
+  </div>
+  <div class="card">
+    <div class="card-num">{{ counts.logs }}</div>
+    <div class="card-label">接口调用记录</div>
+  </div>
+  <div class="card">
+    <div class="card-num">{{ service }}</div>
+    <div class="card-label">服务状态 · v{{ version }}</div>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>快速开始</h2>
+  <p>API 基础路径：<code>{{ api_prefix }}</code>。以下命令可直接复制执行：</p>
+  <pre class="codeblock"><code># 健康检查
+curl {{ api_prefix }}/health
+
+# 查询物料列表
+curl "{{ api_prefix }}/items?item_id=P-1000"
+
+# 查询 BOM（单层）
+curl "{{ api_prefix }}/items/item-p1000/bom"
+
+# 查询 BOM（全展开）
+curl "{{ api_prefix }}/items/item-p1000/bom/expand"
+
+# 按物料编号查 BOM
+curl "{{ api_prefix }}/structures/item-p1000?depth=-1"</code></pre>
+</section>
+{% endblock %}

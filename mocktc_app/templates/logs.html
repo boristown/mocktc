@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}接口日志{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="logs-head">
+    <h2>接口日志</h2>
+    <div class="logs-controls">
+      <label class="chk"><input type="checkbox" id="auto-refresh" checked> 自动刷新 (3s)</label>
+      <button class="btn btn-sm btn-danger" id="clear-logs">清空日志</button>
+    </div>
+  </div>
+  <form class="filter-bar" id="log-filter" method="get" action="/logs/table">
+    <input type="text" name="path" placeholder="路径包含，如 /items" value="{{ path or '' }}">
+    <input type="text" name="status" placeholder="状态码，如 200" value="{{ status or '' }}">
+    <select name="method">
+      <option value="">全部方法</option>
+      {% for m in ['GET','POST','PUT','DELETE','PATCH'] %}
+      <option value="{{ m }}" {{ 'selected' if method == m }}>{{ m }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn btn-sm btn-primary" type="submit">筛选</button>
+    <a class="btn btn-sm" href="/logs/table">重置</a>
+  </form>
+  <div id="logs-container">
+    {% include "logs_table.html" %}
+  </div>
+</section>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+{% endblock %}

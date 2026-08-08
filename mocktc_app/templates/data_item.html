@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}{{ item.item_id }} BOM{% endblock %}
+{% block content %}
+<section class="panel">
+  <h2>{{ item.item_id }} - {{ item.item_name }}</h2>
+  <table class="table kv">
+    <tbody>
+      <tr><th>UID</th><td><code>{{ item.uid }}</code></td></tr>
+      <tr><th>类型</th><td>{{ item.item_type }}</td></tr>
+      <tr><th>版本</th><td>{{ item.revision }}</td></tr>
+      <tr><th>项目</th><td>{{ item.project }}</td></tr>
+      <tr><th>状态</th><td>{{ item.status }}</td></tr>
+    </tbody>
+  </table>
+  <p>
+    <a class="btn btn-sm" href="{{ api_prefix }}/items/{{ item.uid }}/bom/expand" target="_blank">查看原始 JSON</a>
+    <a class="btn btn-sm" href="/data">返回物料列表</a>
+  </p>
+</section>
+
+<section class="panel">
+  <h2>BOM 结构</h2>
+  {% if bom_lines %}
+  {% macro bom_rows(lines, level) -%}
+    {%- for line in lines -%}
+      <tr class="{{ 'child' if level > 0 }}">
+        <td><code>{{ line.position }}</code></td>
+        <td><a href="/data/item/{{ line.child_item.uid }}">{{ line.child_item.item_id }}</a></td>
+        <td>{{ '└ ' * level }}{{ line.child_item.item_name }}</td>
+        <td>{{ line.child_item.item_type }}</td>
+        <td>{{ line.quantity }}</td>
+        <td>{{ line.unit }}</td>
+        <td>{{ line.notes }}</td>
+      </tr>
+      {%- if line.children -%}
+        {{ bom_rows(line.children, level + 1) }}
+      {%- endif -%}
+    {%- endfor -%}
+  {%- endmacro %}
+  <table class="table bom">
+    <thead>
+      <tr><th>位置</th><th>物料编号</th><th>名称</th><th>类型</th><th>数量</th><th>单位</th><th>备注</th></tr>
+    </thead>
+    <tbody>
+      {{ bom_rows(bom_lines, 0) }}
+    </tbody>
+  </table>
+  {% else %}
+  <p>该物料没有已发布的 BOM。</p>
+  {% endif %}
+</section>
+{% endblock %}

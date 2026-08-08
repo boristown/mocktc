@@ -1,0 +1,16 @@
+[Unit]
+Description=Mock Teamcenter (mocktc.bjlzc.cn)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/oracle/mocktc
+Environment=MOCKTC_DATA_DIR=/oracle/mocktc/data
+ExecStart=/oracle/mocktc/venv/bin/gunicorn -w 2 --threads 4 -t 120 -b 127.0.0.1:18120 --access-logfile - app:app
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
