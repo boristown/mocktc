@@ -11,6 +11,10 @@ os.environ["MOCKTC_DB_PATH"] = os.path.join(_TMPDIR, "test.db")
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "mocktc_app"))
 import app as app_module
 
+FIXTURE_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "mocktc_app", "fixtures", "20260808-bom1-2.json"
+)
+
 
 class MockTcTestCase(unittest.TestCase):
     @classmethod
@@ -88,6 +92,29 @@ class MockTcTestCase(unittest.TestCase):
     def test_structure_alias(self):
         data = self.get_json("/tc/v1/structures/item-p1000?depth=-1")
         self.assertTrue(data["data"]["bom_lines"])
+
+    def test_fixture_item_registered(self):
+        data = self.get_json("/tc/v1/items?item_id=LITHO-001")
+        self.assertGreaterEqual(data["data"]["total"], 1)
+        detail = self.get_json("/tc/v1/items/item-litho-001")
+        self.assertEqual(detail["data"]["item_id"], "LITHO-001")
+
+    def test_fixture_bom_exact(self):
+        with open(FIXTURE_PATH, "rb") as fh:
+            expected = fh.read()
+        for path in [
+            "/tc/v1/items/item-litho-001/bom",
+            "/tc/v1/items/item-litho-001/bom/expand",
+            "/tc/v1/structures/item-litho-001",
+        ]:
+            resp = self.client.get(path)
+            self.assertEqual(resp.status_code, 200, path)
+            self.assertEqual(resp.content_type, "application/json", path)
+            self.assertEqual(resp.data, expected, path)
+            data = json.loads(resp.get_data(as_text=True))
+            self.assertIsInstance(data, list, path)
+            self.assertEqual(data[0]["part_id"], "LITHO-001", path)
+            self.assertGreater(len(data), 3000, path)
 
     def test_create_item(self):
         resp = self.client.post(

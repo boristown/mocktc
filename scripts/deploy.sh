@@ -39,10 +39,11 @@ fi
 "$APP_ROOT/venv/bin/pip" install -q -r "$REPO_ROOT/requirements.txt"
 
 # 3. app files (repo -> runtime dir)
-install -d -m 755 "$APP_ROOT/templates" "$APP_ROOT/static"
+install -d -m 755 "$APP_ROOT/templates" "$APP_ROOT/static" "$APP_ROOT/fixtures"
 install -m 644 "$REPO_ROOT/mocktc_app/app.py" "$APP_ROOT/app.py"
 install -m 644 "$REPO_ROOT/mocktc_app/templates/"*.html "$APP_ROOT/templates/"
 install -m 644 "$REPO_ROOT/mocktc_app/static/"*.css "$REPO_ROOT/mocktc_app/static/"*.js "$APP_ROOT/static/" 2>/dev/null || true
+install -m 644 "$REPO_ROOT/mocktc_app/fixtures/"*.json "$APP_ROOT/fixtures/" 2>/dev/null || true
 
 # 4. systemd units + auto-start
 install -m 644 "$REPO_ROOT/systemd/mocktc.service" /etc/systemd/system/mocktc.service

@@ -33,6 +33,19 @@
 | GET | `/tc/v1/bomlines/<uid>` | BOM 行详情 |
 | GET | `/tc/v1/bomlines/<uid>/children` | BOM 行子行 |
 
+### 外部 BOM 数据（LITHO-001）
+
+物料 `LITHO-001`（光刻机整机）的 BOM 接口直接返回外部上传文件
+`mocktc_app/fixtures/20260808-bom1-2.json` 的原始内容（3316 行，顶层为数组，
+字段 `bom_level` / `parent_uid` / `child_uid` / `part_id` / `revision_id` /
+`part_name` / `quantity`），不做 JSON 包装：
+
+```sh
+curl https://mocktc.bjlzc.cn/tc/v1/items/item-litho-001/bom
+curl https://mocktc.bjlzc.cn/tc/v1/items/item-litho-001/bom/expand
+curl https://mocktc.bjlzc.cn/tc/v1/structures/item-litho-001
+```
+
 常用示例：
 
 ```sh

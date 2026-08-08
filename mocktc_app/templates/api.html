@@ -7,6 +7,10 @@
      <code>{"status": &lt;HTTP状态码&gt;, "message": "OK", "data": {...}}</code>。</p>
   <p>数据以 Teamcenter 风格的 UID 标识（如 <code>item-p1000</code>、<code>bl-p1000-1</code>），
      可用物料编号查询后获取 UID，再查询 BOM 结构。</p>
+  <p class="note"><strong>特殊接口：</strong>物料 <code>LITHO-001</code>（光刻机整机）的 BOM
+     直接返回外部上传的原始 JSON 文件 <code>20260808-bom1-2.json</code>（3316 行，不做包装，
+     顶层为数组，字段含 <code>bom_level</code> / <code>parent_uid</code> / <code>child_uid</code>
+     / <code>part_id</code> / <code>part_name</code> / <code>quantity</code>）。</p>
 </section>
 
 <section class="panel">
@@ -49,5 +53,7 @@
   "project": "XM-MOCK",
   "revision_id": "A"
 }'</code></pre>
+  <h3>6. 外部 BOM 数据（LITHO-001，返回 20260808-bom1-2.json 原始内容）</h3>
+  <pre class="codeblock"><code>curl "{{ api_prefix }}/items/item-litho-001/bom/expand"</code></pre>
 </section>
 {% endblock %}

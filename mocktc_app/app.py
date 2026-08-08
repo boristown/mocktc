@@ -28,6 +28,9 @@ API_PREFIX = "/tc/v1"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get("MOCKTC_DATA_DIR", os.path.join(BASE_DIR, "data"))
 DB_PATH = os.environ.get("MOCKTC_DB_PATH", os.path.join(DATA_DIR, "mocktc.db"))
+FIXTURE_DIR = os.path.join(BASE_DIR, "fixtures")
+FIXTURE_BOM_FILENAME = "20260808-bom1-2.json"
+FIXTURE_ITEM_UID = "item-litho-001"
 MAX_LOG_BODY = 5000  # characters stored per request/response body
 
 
@@ -224,6 +227,68 @@ def create_app():
 
     init_db()
     seed_if_empty()
+
+    # ---------------------------------------------------- external fixture
+    # BOM 数据来自外部上传文件 20260808-bom1-2.json（物料 LITHO-001）：
+    # 调用 LITHO-001 的 BOM 接口时按原始字节返回该 JSON（数组，不做包装）。
+    fixture_bom = None
+    fixture_raw = None
+    fixture_root = {}
+    fixture_path = os.path.join(FIXTURE_DIR, FIXTURE_BOM_FILENAME)
+    if os.path.exists(fixture_path):
+        with open(fixture_path, "r", encoding="utf-8") as fh:
+            fixture_raw = fh.read().encode("utf-8")
+            loaded = json.loads(fixture_raw)
+        if isinstance(loaded, list) and loaded:
+            fixture_bom = loaded
+            root = loaded[0]
+            fixture_root = {
+                "item_id": str(root.get("part_id") or "LITHO-001"),
+                "item_name": str(root.get("part_name") or "光刻机整机"),
+                "revision": str(root.get("revision_id") or "A"),
+            }
+
+    def register_fixture_item():
+        if not fixture_root:
+            return
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        created = now_iso()
+        conn.execute(
+            "INSERT OR IGNORE INTO items "
+            "(uid, item_id, item_name, item_type, project, owner, status, created) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (
+                FIXTURE_ITEM_UID,
+                fixture_root["item_id"],
+                fixture_root["item_name"],
+                "Assembly",
+                "XM-MOCK",
+                "",
+                "Released",
+                created,
+            ),
+        )
+        conn.execute(
+            "INSERT OR IGNORE INTO item_revisions "
+            "(uid, item_uid, revision_id, description, status, sequence) VALUES (?,?,?,?,?,1)",
+            (
+                "rev-" + FIXTURE_ITEM_UID + "-" + fixture_root["revision"],
+                FIXTURE_ITEM_UID,
+                fixture_root["revision"],
+                "",
+                "Released",
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+    register_fixture_item()
+
+    def fixture_bom_response():
+        if fixture_raw is not None:
+            return Response(fixture_raw, mimetype="application/json")
+        return api_err(500, "BOM fixture not loaded")
 
     # ------------------------------------------------------------ helpers
     def item_row(uid):
@@ -498,6 +563,8 @@ def create_app():
         row = item_row(uid)
         if row is None:
             return api_err(404, "Item not found: " + uid)
+        if uid == FIXTURE_ITEM_UID:
+            return fixture_bom_response()
         try:
             depth = parse_depth()
         except ValueError as exc:
@@ -526,6 +593,8 @@ def create_app():
         row = item_row(uid)
         if row is None:
             return api_err(404, "Item not found: " + uid)
+        if uid == FIXTURE_ITEM_UID:
+            return fixture_bom_response()
         header = header_for_item(uid)
         if header is None:
             return api_ok(
