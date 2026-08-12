@@ -13,6 +13,7 @@ Runs on Python 3.6+ / Flask 2.0+.
 
 import json
 import os
+import re
 import sqlite3
 import time
 import uuid
@@ -22,13 +23,13 @@ from flask import Flask, Response, g, jsonify, render_template, request
 
 
 SERVICE_NAME = "Mock Teamcenter"
-SERVICE_VERSION = "1.0.0"
+SERVICE_VERSION = "1.1.0"
 API_PREFIX = "/tc/v1"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.environ.get("MOCKTC_DATA_DIR", os.path.join(BASE_DIR, "data"))
 DB_PATH = os.environ.get("MOCKTC_DB_PATH", os.path.join(DATA_DIR, "mocktc.db"))
-FIXTURE_DIR = os.path.join(BASE_DIR, "fixtures")
+FIXTURE_DIR = os.environ.get("MOCKTC_FIXTURE_DIR", os.path.join(BASE_DIR, "fixtures"))
 FIXTURE_BOM_FILENAME = "20260808-bom1-2.json"
 FIXTURE_ITEM_UID = "item-litho-001"
 MAX_LOG_BODY = 5000  # characters stored per request/response body
@@ -228,25 +229,93 @@ def create_app():
     init_db()
     seed_if_empty()
 
-    # ---------------------------------------------------- external fixture
-    # BOM 数据来自外部上传文件 20260808-bom1-2.json（物料 LITHO-001）：
-    # 调用 LITHO-001 的 BOM 接口时按原始字节返回该 JSON（数组，不做包装）。
+    # ---------------------------------------------------- external fixtures
+    # 只读 BOM JSON 数据集：启动时扫描 FIXTURE_DIR（默认 mocktc_app/fixtures，
+    # 可用环境变量 MOCKTC_FIXTURE_DIR 覆盖）下的 *.json 文件，供只读查询 API
+    # 使用。LITHO-001 的历史 BOM 接口保持兼容：仍按原始字节返回
+    # 20260808-bom1-2.json（数组，不做包装）。
+    FIXTURE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+    def fixture_name_ok(name):
+        return (
+            isinstance(name, str)
+            and bool(name)
+            and ".." not in name
+            and "/" not in name
+            and "\\" not in name
+            and "\x00" not in name
+            and bool(FIXTURE_NAME_RE.match(name))
+        )
+
+    def load_fixtures():
+        loaded = {}
+        if not os.path.isdir(FIXTURE_DIR):
+            return loaded
+        for fname in sorted(os.listdir(FIXTURE_DIR)):
+            if not fname.endswith(".json") or not fixture_name_ok(fname):
+                continue
+            fpath = os.path.join(FIXTURE_DIR, fname)
+            if not os.path.isfile(fpath):
+                continue
+            try:
+                with open(fpath, "rb") as fh:
+                    raw = fh.read()
+                rows = json.loads(raw)
+                if not isinstance(rows, list):
+                    app.logger.warning(
+                        "fixture %s: top-level is not a JSON array, skipped", fname
+                    )
+                    continue
+                fields = []
+                child_to_row = {}
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    for key in row:
+                        if key not in fields:
+                            fields.append(key)
+                    cid = row.get("child_uid")
+                    if cid is not None and str(cid) not in child_to_row:
+                        child_to_row[str(cid)] = row
+                root = rows[0] if rows else None
+                for row in rows:
+                    if isinstance(row, dict) and row.get("bom_level") == 0:
+                        root = row
+                        break
+                root = root if isinstance(root, dict) else {}
+                loaded[fname] = {
+                    "meta": {
+                        "name": fname,
+                        "size": len(raw),
+                        "rows": len(rows),
+                        "fields": fields,
+                        "item_id": str(root.get("part_id") or ""),
+                        "part_name": str(root.get("part_name") or ""),
+                        "revision": str(root.get("revision_id") or ""),
+                    },
+                    "raw": raw,
+                    "rows": rows,
+                    "child_to_row": child_to_row,
+                }
+            except Exception as exc:
+                app.logger.warning("fixture %s: failed to load: %s", fname, exc)
+        return loaded
+
+    fixtures = load_fixtures()
+
+    # 兼容旧逻辑：LITHO-001（FIXTURE_BOM_FILENAME）的 BOM 接口按原始字节返回。
     fixture_bom = None
     fixture_raw = None
     fixture_root = {}
-    fixture_path = os.path.join(FIXTURE_DIR, FIXTURE_BOM_FILENAME)
-    if os.path.exists(fixture_path):
-        with open(fixture_path, "r", encoding="utf-8") as fh:
-            fixture_raw = fh.read().encode("utf-8")
-            loaded = json.loads(fixture_raw)
-        if isinstance(loaded, list) and loaded:
-            fixture_bom = loaded
-            root = loaded[0]
-            fixture_root = {
-                "item_id": str(root.get("part_id") or "LITHO-001"),
-                "item_name": str(root.get("part_name") or "光刻机整机"),
-                "revision": str(root.get("revision_id") or "A"),
-            }
+    legacy_fixture = fixtures.get(FIXTURE_BOM_FILENAME)
+    if legacy_fixture is not None and legacy_fixture["meta"]["item_id"]:
+        fixture_raw = legacy_fixture["raw"]
+        fixture_bom = legacy_fixture["rows"]
+        fixture_root = {
+            "item_id": legacy_fixture["meta"]["item_id"],
+            "item_name": legacy_fixture["meta"]["part_name"] or "BOM Fixture",
+            "revision": legacy_fixture["meta"]["revision"] or "A",
+        }
 
     def register_fixture_item():
         if not fixture_root:
@@ -353,6 +422,24 @@ def create_app():
                 children.append(node)
         return children
 
+    def get_fixture_or_error(name):
+        """只读 fixture 查找：不触碰文件系统，仅返回启动时注册的数据。
+        非法名称 -> 400；合法但不存在 -> 404；两者都明确返回结构化错误。"""
+        if not fixture_name_ok(name):
+            return None, api_err(400, "Invalid fixture name: " + str(name))
+        fixture = fixtures.get(name)
+        if fixture is None:
+            return None, api_err(404, "Fixture not found: " + str(name))
+        return fixture, None
+
+    def enrich_fixture_row(row, fixture):
+        """为 fixture 行补充父级物料信息（parent_id / parent_name）。"""
+        out = dict(row)
+        parent = fixture["child_to_row"].get(str(row.get("parent_uid") or ""))
+        out["parent_id"] = str(parent.get("part_id") or "") if parent else ""
+        out["parent_name"] = str(parent.get("part_name") or "") if parent else ""
+        return out
+
     def api_ok(data):
         return jsonify({"status": 200, "message": "OK", "data": data})
 
@@ -443,6 +530,10 @@ def create_app():
                 "api_base": API_PREFIX,
                 "time": now_iso(),
                 "status": "up",
+                "fixtures": {
+                    "total": len(fixtures),
+                    "names": [f["meta"]["name"] for f in fixtures.values()],
+                },
             }
         )
 
@@ -645,6 +736,135 @@ def create_app():
             return api_err(400, str(exc))
         children = build_tree(row["child_item_uid"], depth, set())
         return api_ok({"bom_line": dict(row), "children": children})
+
+    # --------------------------------------------------------- fixture API
+    @app.route(API_PREFIX + "/fixtures", methods=["GET"])
+    def list_fixtures():
+        return api_ok(
+            {
+                "total": len(fixtures),
+                "fixtures": [f["meta"] for f in fixtures.values()],
+            }
+        )
+
+    @app.route(API_PREFIX + "/fixtures/<name>", methods=["GET"])
+    def get_fixture_file(name):
+        fixture, err = get_fixture_or_error(name)
+        if err is not None:
+            return err
+        if (request.args.get("raw") or "").lower() in ("1", "true", "yes", "on"):
+            return Response(fixture["raw"], mimetype="application/json")
+        return api_ok(
+            {
+                "fixture": fixture["meta"],
+                "total": fixture["meta"]["rows"],
+                "fields": fixture["meta"]["fields"],
+                "items": fixture["rows"],
+            }
+        )
+
+    @app.route(API_PREFIX + "/fixtures/<name>/query", methods=["GET"])
+    def query_fixture(name):
+        fixture, err = get_fixture_or_error(name)
+        if err is not None:
+            return err
+        part_id_q = (request.args.get("part_id") or "").strip()
+        part_name_q = (request.args.get("part_name") or "").strip()
+        q = (request.args.get("q") or "").strip()
+        revision_q = (request.args.get("revision_id") or "").strip()
+        child_uid_q = (request.args.get("child_uid") or "").strip()
+        parent_uid_q = (request.args.get("parent_uid") or "").strip()
+        parent_id_q = (request.args.get("parent_id") or "").strip()
+        exact = (request.args.get("exact") or "").lower() in ("1", "true", "yes", "on")
+        bom_level_raw = (request.args.get("bom_level") or "").strip()
+        try:
+            limit = max(1, min(int(request.args.get("limit", 200)), 1000))
+            offset = max(0, int(request.args.get("offset", 0)))
+        except (TypeError, ValueError):
+            return api_err(400, "limit/offset 必须为整数")
+        if bom_level_raw:
+            try:
+                bom_level = int(bom_level_raw)
+            except ValueError:
+                return api_err(400, "bom_level 必须为整数")
+        else:
+            bom_level = None
+
+        parent_uid_for_id = None
+        if parent_id_q:
+            for row in fixture["rows"]:
+                if isinstance(row, dict) and str(row.get("part_id") or "").strip() == parent_id_q:
+                    parent_uid_for_id = row.get("child_uid")
+                    break
+
+        def match(row):
+            if not isinstance(row, dict):
+                return False
+
+            def s(key):
+                return str(row.get(key) or "").strip()
+
+            if part_id_q:
+                pid = s("part_id").lower()
+                needle = part_id_q.lower()
+                if exact:
+                    if pid != needle:
+                        return False
+                elif needle not in pid:
+                    return False
+            if part_name_q and part_name_q.lower() not in s("part_name").lower():
+                return False
+            if q and q.lower() not in s("part_id").lower() and q.lower() not in s("part_name").lower():
+                return False
+            if revision_q and s("revision_id") != revision_q:
+                return False
+            if bom_level is not None and row.get("bom_level") != bom_level:
+                return False
+            if child_uid_q and s("child_uid") != child_uid_q:
+                return False
+            if parent_uid_q and s("parent_uid") != parent_uid_q:
+                return False
+            if parent_id_q:
+                if parent_uid_for_id is None or s("parent_uid") != str(parent_uid_for_id):
+                    return False
+            return True
+
+        matched = [enrich_fixture_row(r, fixture) for r in fixture["rows"] if match(r)]
+        return api_ok(
+            {
+                "fixture": fixture["meta"],
+                "total": len(matched),
+                "limit": limit,
+                "offset": offset,
+                "items": matched[offset : offset + limit],
+            }
+        )
+
+    @app.route(API_PREFIX + "/fixtures/<name>/materials/<part_id>", methods=["GET"])
+    def get_fixture_material(name, part_id):
+        fixture, err = get_fixture_or_error(name)
+        if err is not None:
+            return err
+        part_id = part_id.strip()
+        matched = []
+        for row in fixture["rows"]:
+            if isinstance(row, dict) and str(row.get("part_id") or "").strip() == part_id:
+                matched.append(row)
+        if not matched:
+            return api_err(
+                404, "Material not found in fixture " + name + ": " + part_id
+            )
+        enriched = [enrich_fixture_row(r, fixture) for r in matched]
+        return api_ok(
+            {
+                "fixture": fixture["meta"],
+                "part_id": part_id,
+                "part_name": str(matched[0].get("part_name") or ""),
+                "revision_id": str(matched[0].get("revision_id") or ""),
+                "total": len(enriched),
+                "items": enriched,
+            }
+        )
 
     # -------------------------------------------------------------- UI pages
     @app.route("/")

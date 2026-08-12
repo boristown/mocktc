@@ -9,6 +9,7 @@
 ## 功能
 
 - RESTful 接口：物料（Items）、版本（Revisions）、BOM 结构（单层/多级展开）
+- 只读 BOM JSON 查询 API：fixture 列表、完整读取、按物料/字段查询（LITHO-001 光刻机 BOM）
 - 内置示例 BOM 数据（3 个总成、8 个 BOM 头、24 行 BOM 行、21 个物料）
 - 接口日志：自动记录每次 `/tc/v1/*` 调用的请求/响应、耗时、状态码，界面实时查看
 - 简单界面：首页 / API 文档 / 接口日志 / 数据浏览
@@ -32,6 +33,10 @@
 | GET | `/tc/v1/structures/<item_uid>` | BOM 结构别名接口 |
 | GET | `/tc/v1/bomlines/<uid>` | BOM 行详情 |
 | GET | `/tc/v1/bomlines/<uid>/children` | BOM 行子行 |
+| GET | `/tc/v1/fixtures` | 只读：已加载的 BOM JSON fixture 列表 |
+| GET | `/tc/v1/fixtures/<name>` | 只读：完整 fixture 读取（`?raw=1` 返回原始字节） |
+| GET | `/tc/v1/fixtures/<name>/query` | 只读：按物料/字段查询（`part_id`、`part_name`、`q`、`bom_level`、`revision_id`、`parent_id`、`child_uid`、`parent_uid`、`exact`、`limit`、`offset`） |
+| GET | `/tc/v1/fixtures/<name>/materials/<part_id>` | 只读：物料详情（不存在返回 404） |
 
 ### 外部 BOM 数据（LITHO-001）
 
@@ -55,7 +60,72 @@ curl "https://mocktc.bjlzc.cn/tc/v1/items/item-p1000/bom?depth=0"
 curl "https://mocktc.bjlzc.cn/tc/v1/items/item-p1000/bom/expand"
 ```
 
+### 只读 BOM JSON 查询 API（供 TC 物料查询技能使用）
+
+fixture 文件在启动时加载进内存（默认目录 `mocktc_app/fixtures/`，可用环境变量
+`MOCKTC_FIXTURE_DIR` 覆盖），所有 `/tc/v1/fixtures*` 接口均为只读、稳定返回
+统一包装 `{"status": 200, "message": "OK", "data": {...}}`；未知 fixture / 物料
+返回 404，非法参数（`limit`/`offset`/`bom_level` 非整数等）返回 400。
+
+```sh
+# 1. 查看可用 fixture（元数据：行数、字段、根物料）
+curl https://mocktc.bjlzc.cn/tc/v1/fixtures
+
+# 2. 完整读取 fixture（默认结构化包装；?raw=1 返回与文件完全一致的原始 JSON 数组）
+curl https://mocktc.bjlzc.cn/tc/v1/fixtures/20260808-bom1-2.json
+curl https://mocktc.bjlzc.cn/tc/v1/fixtures/20260808-bom1-2.json?raw=1
+
+# 3. 按物料编号查询（part_id 默认模糊匹配，exact=1 精确匹配；返回行附带 parent_id/parent_name）
+curl "https://mocktc.bjlzc.cn/tc/v1/fixtures/20260808-bom1-2.json/query?part_id=S01&exact=1"
+curl "https://mocktc.bjlzc.cn/tc/v1/fixtures/20260808-bom1-2.json/query?q=光源"
+curl "https://mocktc.bjlzc.cn/tc/v1/fixtures/20260808-bom1-2.json/query?bom_level=1"
+curl "https://mocktc.bjlzc.cn/tc/v1/fixtures/20260808-bom1-2.json/query?parent_id=LITHO-001"
+curl "https://mocktc.bjlzc.cn/tc/v1/fixtures/20260808-bom1-2.json/query?limit=50&offset=0"
+
+# 4. 物料详情（不存在返回 404）
+curl https://mocktc.bjlzc.cn/tc/v1/fixtures/20260808-bom1-2.json/materials/S01
+```
+
+`query` 接口响应示例（`data.items` 中每行在原字段基础上补充
+`parent_id` / `parent_name`，用于定位该物料所属父级）：
+
+```json
+{"status":200,"message":"OK","data":{
+  "fixture":{"name":"20260808-bom1-2.json","rows":3316},
+  "total":1,"limit":200,"offset":0,
+  "items":[{"bom_level":1,"parent_uid":"wompmV_gJj7wdB","child_uid":"AJjpmV_gJj7wdB",
+            "part_id":"S01","revision_id":"A","part_name":"光源系统","quantity":1,
+            "parent_id":"LITHO-001","parent_name":"光刻机整机"}]}}
+```
+
+### ECC/TC 差异测试 fixture（SAP 对齐）
+
+`20260810-sap-alignment-diff-G100000013.json`（20 行）是供 ECC/TC 差异测试的确定性
+TC 侧 fixture：顶层物料 `G100000013`，BOM 头 `00000011/01`，基本数量 `1000`（单位 EA），
+结构以 ECC（CS_BOM_EXPL_MAT_V2 未限定工厂完整展开，18 行组件、最大 5 层）为基线对齐，
+保留各层 BOM 编号、项目号与父子关系，并完整保留 ECC 侧的部件损耗率（AUSCH→`scrap_rate`）。
+`quantity` 以三精度字符串（如 `"1000.000"`）保留 SAP 侧格式；每行使用唯一 `child_uid`
+与正确 `parent_uid`，并保留 `bom_number` / `bom_alt` / `item_category` / `item_no` /
+`revision_id` / `plant` / `usage` / `scrap_rate`（部件损耗率）等扩展字段。
+
+相对 ECC 基线预置确定性差异（供 BOM 比对演示）：
+
+- 新增组件：`G200000020` 下新增原材料 `G300000108`（`1500.000` EA，损耗 `4.00`；
+  ECC 中 `G200000020` 无子 BOM，该物料仅存在于 `G200000018` 下）。
+- 数量+损耗差异（4 行）：`G200000019` `1000.000`/无 → `1200.000`/`5.00`；
+  `G200000020` `2000.000`/无 → `2500.000`/`3.00`；
+  `G300000115` `3000.000`/无 → `3500.000`/`2.50`；
+  `G300000116` `2000.000`/`20.00` → `2100.000`/`15.00`。
+- 其余 13 行组件与 ECC 完全一致（含损耗 `10.00`/`100.00`/`5.00` 的三行）。
+
+```sh
+curl https://mocktc.bjlzc.cn/tc/v1/fixtures/20260810-sap-alignment-diff-G100000013.json
+curl "https://mocktc.bjlzc.cn/tc/v1/fixtures/20260810-sap-alignment-diff-G100000013.json/query?part_id=G300000108&exact=1"
+curl "https://mocktc.bjlzc.cn/tc/v1/fixtures/20260810-sap-alignment-diff-G100000013.json/query?part_id=G200000019&exact=1"
+```
+
 ## 本地运行
+
 
 ```sh
 python3 -m venv .venv
@@ -79,6 +149,10 @@ python3 -m unittest discover -s tests -v
 - 独立 Python 3.11：`/oracle/python311`（不修改全局 python）
 - 虚拟环境：`/oracle/mocktc/venv`
 - 服务端口：`127.0.0.1:18120`
+
+fixture 数据随仓库发布（`mocktc_app/fixtures/`，deploy.sh 会安装到
+`/oracle/mocktc/fixtures/`）；如需从其他目录加载可设置
+`MOCKTC_FIXTURE_DIR=/oracle/mocktc/fixtures`（默认即此目录）。
 
 一键上传并部署（在控制服务器执行）：
 
@@ -120,5 +194,8 @@ tests/               unittest 接口测试
 ## 安全说明
 
 - 默认无鉴权，仅用于内网/联调环境；如需保护可设置 `MOCKTC_API_TOKEN` 环境变量
+- fixture 只读接口防目录穿越：仅接受启动时注册的合法文件名（正则
+  `^[A-Za-z0-9][A-Za-z0-9._-]*$` 且不含 `..`、路径分隔符、空字节），
+  查询过程不触达文件系统，非法名称返回 400、未注册名称返回 404
 - FRP token 从目标主机已有配置继承，不写入 Git
 - 生产系统请使用真实 Teamcenter

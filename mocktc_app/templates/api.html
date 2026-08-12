@@ -11,6 +11,9 @@
      直接返回外部上传的原始 JSON 文件 <code>20260808-bom1-2.json</code>（3316 行，不做包装，
      顶层为数组，字段含 <code>bom_level</code> / <code>parent_uid</code> / <code>child_uid</code>
      / <code>part_id</code> / <code>part_name</code> / <code>quantity</code>）。</p>
+  <p class="note"><strong>只读查询接口：</strong><code>{{ api_prefix }}/fixtures*</code>
+     提供同一文件的列表、完整读取与按物料查询，返回统一包装的结构化 JSON；
+     未知 fixture / 物料返回 404，非法参数返回 400，防目录穿越。</p>
 </section>
 
 <section class="panel">
@@ -31,6 +34,10 @@
       <tr><td><span class="m m-get">GET</span></td><td><code>{{ api_prefix }}/structures/&lt;item_uid&gt;</code></td><td>BOM 结构别名接口</td><td>depth=0 默认</td></tr>
       <tr><td><span class="m m-get">GET</span></td><td><code>{{ api_prefix }}/bomlines/&lt;uid&gt;</code></td><td>BOM 行详情</td><td>-</td></tr>
       <tr><td><span class="m m-get">GET</span></td><td><code>{{ api_prefix }}/bomlines/&lt;uid&gt;/children</code></td><td>BOM 行的子行</td><td>depth=0 默认</td></tr>
+      <tr><td><span class="m m-get">GET</span></td><td><code>{{ api_prefix }}/fixtures</code></td><td>已加载 fixture 列表（只读）</td><td>-</td></tr>
+      <tr><td><span class="m m-get">GET</span></td><td><code>{{ api_prefix }}/fixtures/&lt;name&gt;</code></td><td>完整 fixture 读取（只读）</td><td>raw=1 返回原始字节</td></tr>
+      <tr><td><span class="m m-get">GET</span></td><td><code>{{ api_prefix }}/fixtures/&lt;name&gt;/query</code></td><td>按物料/字段查询（只读）</td><td>part_id, part_name, q, bom_level, revision_id, parent_id, child_uid, parent_uid, exact, limit, offset</td></tr>
+      <tr><td><span class="m m-get">GET</span></td><td><code>{{ api_prefix }}/fixtures/&lt;name&gt;/materials/&lt;part_id&gt;</code></td><td>物料详情（只读，不存在 404）</td><td>-</td></tr>
     </tbody>
   </table>
 </section>
@@ -55,5 +62,13 @@
 }'</code></pre>
   <h3>6. 外部 BOM 数据（LITHO-001，返回 20260808-bom1-2.json 原始内容）</h3>
   <pre class="codeblock"><code>curl "{{ api_prefix }}/items/item-litho-001/bom/expand"</code></pre>
+  <h3>7. 查看可用 fixture 列表</h3>
+  <pre class="codeblock"><code>curl "{{ api_prefix }}/fixtures"</code></pre>
+  <h3>8. 按物料编号查询（精确匹配，附带父级信息）</h3>
+  <pre class="codeblock"><code>curl "{{ api_prefix }}/fixtures/20260808-bom1-2.json/query?part_id=S01&amp;exact=1"</code></pre>
+  <h3>9. 完整读取 fixture（结构化）</h3>
+  <pre class="codeblock"><code>curl "{{ api_prefix }}/fixtures/20260808-bom1-2.json"</code></pre>
+  <h3>10. 物料详情（不存在返回 404）</h3>
+  <pre class="codeblock"><code>curl "{{ api_prefix }}/fixtures/20260808-bom1-2.json/materials/S01"</code></pre>
 </section>
 {% endblock %}
