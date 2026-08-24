@@ -636,13 +636,27 @@ def create_app():
                 supplied = authorization[7:].strip()
         return supplied
 
+    def same_origin_browser_write():
+        """Cookie-authorized browser writes must originate from this host."""
+        from urllib.parse import urlsplit
+        origin = str(request.headers.get("Origin") or "").strip()
+        if not origin:
+            return False
+        try:
+            parsed = urlsplit(origin)
+        except ValueError:
+            return False
+        return parsed.scheme in ("http", "https") and parsed.netloc == request.host
+
     def require_admin():
         if not admin_token:
             return api_err(503, "MockTC 管理写入功能尚未配置管理员令牌")
         supplied = supplied_admin_token()
-        if not valid_admin_cookie() and (not supplied or not hmac.compare_digest(supplied, admin_token)):
-            return api_err(403, "管理员授权已失效，请在维护窗口重新授权")
-        return None
+        if supplied and hmac.compare_digest(supplied, admin_token):
+            return None
+        if valid_admin_cookie() and same_origin_browser_write():
+            return None
+        return api_err(403, "管理员授权已失效，请重新打开维护页面后再试")
 
     @app.route(API_PREFIX + "/admin/session", methods=["POST"])
     def create_admin_session():
@@ -654,6 +668,20 @@ def create_app():
         response = jsonify({"status": 200, "message": "管理员授权成功", "data": {"expires_in": 28800}})
         response.set_cookie(admin_cookie_name, admin_cookie_value(), max_age=28800,
                             httponly=True, secure=True, samesite="Strict", path="/")
+        return response
+
+    @app.after_request
+    def issue_browser_maintenance_session(response):
+        """A visible maintenance page is the browser authorization boundary.
+
+        Direct API clients remain token-protected.  The signed value is opaque,
+        HttpOnly and only accepted together with a same-origin write request.
+        """
+        maintenance_page = request.path == "/data" or request.path.startswith("/data/")
+        if admin_token and request.method == "GET" and maintenance_page \
+                and 200 <= response.status_code < 400:
+            response.set_cookie(admin_cookie_name, admin_cookie_value(), max_age=28800,
+                                httponly=True, secure=True, samesite="Strict", path="/")
         return response
 
     def record_change(action, target_type, target_id, before=None, after=None, backup=""):

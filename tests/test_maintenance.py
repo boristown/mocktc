@@ -78,6 +78,7 @@ class MockTcMaintenanceTestCase(unittest.TestCase):
         self.assertIn("HttpOnly", authorized.headers.get("Set-Cookie", ""))
         changed = self.client.patch(
             "/tc/v1/fixtures/editable.json/rows/CHILD-A", json={"quantity": "9"},
+            headers={"Origin": "https://localhost"}, base_url="https://localhost",
         )
         self.assertEqual(changed.status_code, 200, changed.get_data(as_text=True))
         history = self.client.get("/changes")
@@ -85,6 +86,41 @@ class MockTcMaintenanceTestCase(unittest.TestCase):
         self.assertIn(b"editable.json:CHILD-A", history.data)
         self.assertIn(b'&#34;quantity&#34;: &#34;2&#34;', history.data)
         self.assertIn(b'&#34;quantity&#34;: &#34;9&#34;', history.data)
+
+    def test_direct_fixture_page_issues_opaque_session_and_saves_without_token(self):
+        page = self.client.get(
+            "/data/fixture/editable.json", base_url="https://mocktc.example")
+        self.assertEqual(page.status_code, 200)
+        cookie = page.headers.get("Set-Cookie", "")
+        self.assertIn("mocktc_admin_session=", cookie)
+        self.assertIn("HttpOnly", cookie)
+        self.assertIn("Secure", cookie)
+        self.assertIn("SameSite=Strict", cookie)
+        self.assertNotIn(b"admin-token", page.data)
+
+        changed = self.client.patch(
+            "/tc/v1/fixtures/editable.json/rows/CHILD-A",
+            json={"quantity": "11"}, base_url="https://mocktc.example",
+            headers={"Origin": "https://mocktc.example"},
+        )
+        self.assertEqual(changed.status_code, 200, changed.get_data(as_text=True))
+        self.assertEqual(self.body(changed)["data"]["row"]["quantity"], "11")
+
+    def test_browser_cookie_rejects_missing_or_cross_origin_write(self):
+        fresh = self.app.test_client()
+        path = "/tc/v1/fixtures/editable.json/rows/CHILD-A"
+        denied = fresh.patch(
+            path, json={"quantity": "12"}, base_url="https://mocktc.example",
+            headers={"Origin": "https://mocktc.example"},
+        )
+        self.assertEqual(denied.status_code, 403)
+
+        fresh.get("/data/fixture/editable.json", base_url="https://mocktc.example")
+        cross_site = fresh.patch(
+            path, json={"quantity": "12"}, base_url="https://mocktc.example",
+            headers={"Origin": "https://attacker.example"},
+        )
+        self.assertEqual(cross_site.status_code, 403)
 
     def test_fixture_add_and_cascade_delete_preserve_valid_tree(self):
         created = self.client.post(
