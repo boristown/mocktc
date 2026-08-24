@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block title %}{{ fixture.item_id }} BOM{% endblock %}
+{% block content %}
+<section class="panel fixture-hero">
+  <div>
+    <p class="eyebrow">外部 BOM 数据集</p>
+    <h2>{{ fixture.item_id }} · {{ fixture.part_name }}</h2>
+    <p><code>{{ fixture.name }}</code> · 当前筛选 {{ total }} 行 · 共 {{ fixture.rows }} 行</p>
+  </div>
+  <div class="hero-actions">
+    {% if editable %}<button class="btn btn-primary" id="fixture-add">新增子节点</button>{% endif %}
+    <a class="btn" href="{{ api_prefix }}/fixtures/{{ fixture.name }}?raw=1" target="_blank">原始 JSON</a>
+    <a class="btn" href="/data">返回数据集</a>
+  </div>
+</section>
+
+<section class="panel">
+  <form class="fixture-search" method="get">
+    <input name="q" value="{{ q }}" placeholder="搜索物料号、名称、BOM号、父节点或任意字段">
+    <select name="per_page">
+      {% for size in (50, 100, 200) %}<option value="{{ size }}" {{ 'selected' if per_page == size }}>{{ size }} 行/页</option>{% endfor %}
+    </select>
+    <button class="btn btn-primary" type="submit">搜索</button>
+    {% if q %}<a class="btn" href="/data/fixture/{{ fixture.name }}">清除</a>{% endif %}
+  </form>
+  <div class="table-scroll fixture-table-wrap">
+    <table class="table fixture-table">
+      <thead><tr>
+        <th>层级</th><th>物料编号</th><th>物料名称</th><th>数量</th><th>单位</th>
+        <th>BOM编号</th><th>项目号</th><th>损耗率</th><th>父级物料</th><th>版本</th>
+        {% if editable %}<th class="sticky-action">操作</th>{% endif %}
+      </tr></thead>
+      <tbody>
+      {% for row in rows %}
+        <tr>
+          <td><span class="level-pill">L{{ row.bom_level }}</span></td>
+          <td><code>{{ row.part_id }}</code></td>
+          <td><span class="tree-indent" style="--level:{{ row.bom_level }}">{{ row.part_name }}</span></td>
+          <td>{{ row.quantity }}</td><td>{{ row.unit }}</td><td>{{ row.bom_number }}</td>
+          <td>{{ row.item_no }}</td><td>{{ row.scrap_rate }}</td>
+          <td><code>{{ row.parent_id }}</code> {{ row.parent_name }}</td><td>{{ row.revision_id }}</td>
+          {% if editable %}<td class="sticky-action"><button type="button" class="btn btn-xs fixture-edit" data-row="{{ row|tojson|forceescape }}">编辑</button> <button type="button" class="btn btn-xs fixture-add-child" data-parent="{{ row.child_uid }}">新增下级</button></td>{% endif %}
+        </tr>
+      {% else %}<tr><td colspan="11" class="empty">没有匹配数据</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="pager">
+    {% if page > 1 %}<a class="btn btn-sm" href="?q={{ q|urlencode }}&per_page={{ per_page }}&page={{ page - 1 }}">上一页</a>{% endif %}
+    <span>第 {{ page }} / {{ pages }} 页</span>
+    {% if page < pages %}<a class="btn btn-sm" href="?q={{ q|urlencode }}&per_page={{ per_page }}&page={{ page + 1 }}">下一页</a>{% endif %}
+  </div>
+</section>
+
+{% if editable %}
+<dialog id="fixture-editor" class="editor-dialog" data-fixture="{{ fixture.name }}">
+  <form method="dialog" id="fixture-form">
+    <div class="dialog-head"><div><p class="eyebrow">MockTC 数据维护</p><h3 id="fixture-editor-title">编辑 BOM 节点</h3></div><button class="icon-btn" value="cancel" aria-label="关闭">×</button></div>
+    <input type="hidden" name="child_uid">
+    <div class="editor-grid">
+      {% for field in editable_fields %}
+      <label><span>{{ field }}</span><input name="{{ field }}"></label>
+      {% endfor %}
+    </div>
+    <p class="admin-token-row"><label><span>管理员令牌</span><input id="admin-token" type="password" autocomplete="current-password" placeholder="仅保存在当前浏览器会话"></label></p>
+    <div class="dialog-actions"><button type="button" class="btn btn-danger" id="fixture-delete">删除节点</button><span class="spacer"></span><button class="btn" value="cancel">取消</button><button type="button" class="btn btn-primary" id="fixture-save">保存修改</button></div>
+  </form>
+</dialog>
+{% endif %}
+{% endblock %}

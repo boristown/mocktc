@@ -3,3 +3,6 @@ __pycache__/
 mocktc_app/data/*.db
 mocktc_app/data/*.db-*
 .venv/
+.env
+mocktc_app/fixtures/.history/
+mocktc_app/data/.history/

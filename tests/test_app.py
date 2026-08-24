@@ -7,6 +7,7 @@ import unittest
 _TMPDIR = tempfile.mkdtemp(prefix="mocktc-test-")
 os.environ["MOCKTC_DATA_DIR"] = _TMPDIR
 os.environ["MOCKTC_DB_PATH"] = os.path.join(_TMPDIR, "test.db")
+os.environ["MOCKTC_ADMIN_TOKEN"] = "test-admin-token"
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "mocktc_app"))
 import app as app_module
@@ -121,6 +122,7 @@ class MockTcTestCase(unittest.TestCase):
             "/tc/v1/items",
             data=json.dumps({"item_id": "TEST-001", "item_name": "测试零件", "item_type": "Part"}),
             content_type="application/json",
+            headers={"X-MockTC-Admin-Token": "test-admin-token"},
         )
         self.assertEqual(resp.status_code, 201)
         data = json.loads(resp.get_data(as_text=True))
@@ -129,6 +131,7 @@ class MockTcTestCase(unittest.TestCase):
             "/tc/v1/items",
             data=json.dumps({"item_id": "TEST-001", "item_name": "重复"}),
             content_type="application/json",
+            headers={"X-MockTC-Admin-Token": "test-admin-token"},
         )
         self.assertEqual(dup.status_code, 409)
 

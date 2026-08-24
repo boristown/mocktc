@@ -9,10 +9,10 @@
 ## 功能
 
 - RESTful 接口：物料（Items）、版本（Revisions）、BOM 结构（单层/多级展开）
-- 只读 BOM JSON 查询 API：fixture 列表、完整读取、按物料/字段查询（LITHO-001 光刻机 BOM）
+- BOM JSON 查询与维护 API：fixture 列表、完整读取、按物料/字段查询，以及受控增删改
 - 内置示例 BOM 数据（3 个总成、8 个 BOM 头、24 行 BOM 行、21 个物料）
 - 接口日志：自动记录每次 `/tc/v1/*` 调用的请求/响应、耗时、状态码，界面实时查看
-- 简单界面：首页 / API 文档 / 接口日志 / 数据浏览
+- 简单界面：首页 / API 文档 / 接口日志 / 数据浏览与 BOM 编辑
 - 可选 Token 鉴权（环境变量 `MOCKTC_API_TOKEN`，默认关闭）
 - 数据持久化到 SQLite，重启不丢失
 
@@ -37,6 +37,26 @@
 | GET | `/tc/v1/fixtures/<name>` | 只读：完整 fixture 读取（`?raw=1` 返回原始字节） |
 | GET | `/tc/v1/fixtures/<name>/query` | 只读：按物料/字段查询（`part_id`、`part_name`、`q`、`bom_level`、`revision_id`、`parent_id`、`child_uid`、`parent_uid`、`exact`、`limit`、`offset`） |
 | GET | `/tc/v1/fixtures/<name>/materials/<part_id>` | 只读：物料详情（不存在返回 404） |
+| PATCH | `/tc/v1/fixtures/<name>/rows/<child_uid>` | 管理：修改 fixture BOM 节点 |
+| POST | `/tc/v1/fixtures/<name>/rows` | 管理：新增 fixture BOM 子节点 |
+| DELETE | `/tc/v1/fixtures/<name>/rows/<child_uid>` | 管理：删除节点；有下级时须 `cascade=1` |
+| PATCH | `/tc/v1/bomlines/<uid>` | 管理：修改标准 BOM 行 |
+| POST | `/tc/v1/items/<uid>/bomlines` | 管理：新增标准 BOM 行 |
+| DELETE | `/tc/v1/bomlines/<uid>` | 管理：删除标准 BOM 行 |
+
+## BOM 数据维护
+
+打开 `https://mocktc.bjlzc.cn/data` 可查看标准 BOM 和所有外部 fixture。外部数据集
+支持任意字段搜索、分页、编辑、新增下级和级联删除；标准 BOM 详情页支持组件增删改。
+
+所有写操作都必须通过请求头 `X-MockTC-Admin-Token` 提交管理员令牌。服务从
+`MOCKTC_ADMIN_TOKEN` 环境变量读取真实值；ECC 运行环境将其保存在权限为 `0600` 的
+`/oracle/mocktc/.env`，前端只在当前浏览器的 `sessionStorage` 中暂存用户输入，服务器
+不会把令牌返回页面或日志。
+
+fixture 修改前会在 `fixtures/.history/` 自动创建原始文件快照，然后使用文件锁和原子
+替换落盘；SQLite 标准 BOM 修改前会在 `data/.history/` 创建数据库快照。因此页面编辑
+失败不会留下半写文件，历史版本也可用于人工回退。
 
 ### 外部 BOM 数据（LITHO-001）
 

@@ -12,18 +12,23 @@ Runs on Python 3.6+ / Flask 2.0+.
 """
 
 import json
+import hmac
 import os
 import re
+import shutil
 import sqlite3
 import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime
+
+import fcntl
 
 from flask import Flask, Response, g, jsonify, render_template, request
 
 
 SERVICE_NAME = "Mock Teamcenter"
-SERVICE_VERSION = "1.1.0"
+SERVICE_VERSION = "1.2.0"
 API_PREFIX = "/tc/v1"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -40,6 +45,10 @@ def create_app():
     app.config["JSON_AS_ASCII"] = False
     app.json.ensure_ascii = False  # Flask 2.2+ / 3.x
     app.config["MAX_CONTENT_LENGTH"] = 2 * 1024 * 1024
+
+    @app.context_processor
+    def inject_service_context():
+        return {"version": SERVICE_VERSION, "service": SERVICE_NAME}
 
     os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -121,6 +130,23 @@ def create_app():
 
     def now_iso():
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+    def backup_database():
+        history_dir = os.path.join(DATA_DIR, ".history")
+        os.makedirs(history_dir, mode=0o700, exist_ok=True)
+        name = "mocktc.db.%s.%s.bak" % (
+            datetime.now().strftime("%Y%m%dT%H%M%S%f"), uuid.uuid4().hex[:8]
+        )
+        target_path = os.path.join(history_dir, name)
+        source = sqlite3.connect(DB_PATH)
+        target = sqlite3.connect(target_path)
+        try:
+            source.backup(target)
+        finally:
+            target.close()
+            source.close()
+        os.chmod(target_path, 0o600)
+        return name
 
     # ------------------------------------------------------------- seeding
     def seed_if_empty():
@@ -230,10 +256,8 @@ def create_app():
     seed_if_empty()
 
     # ---------------------------------------------------- external fixtures
-    # 只读 BOM JSON 数据集：启动时扫描 FIXTURE_DIR（默认 mocktc_app/fixtures，
-    # 可用环境变量 MOCKTC_FIXTURE_DIR 覆盖）下的 *.json 文件，供只读查询 API
-    # 使用。LITHO-001 的历史 BOM 接口保持兼容：仍按原始字节返回
-    # 20260808-bom1-2.json（数组，不做包装）。
+    # BOM JSON 数据集：每次请求从磁盘重新读取，保证多 worker 场景下修改后立即
+    # 可见。写操作使用文件锁、历史快照和同目录原子替换，避免并发覆盖或半文件。
     FIXTURE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 
     def fixture_name_ok(name):
@@ -301,6 +325,77 @@ def create_app():
                 app.logger.warning("fixture %s: failed to load: %s", fname, exc)
         return loaded
 
+    @contextmanager
+    def fixture_write_lock():
+        os.makedirs(FIXTURE_DIR, exist_ok=True)
+        lock_path = os.path.join(FIXTURE_DIR, ".mocktc-fixtures.lock")
+        with open(lock_path, "a+") as lock_file:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+    def validate_fixture_rows(rows):
+        if not isinstance(rows, list) or not rows:
+            raise ValueError("BOM 数据至少需要一行根节点")
+        child_uids = []
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                raise ValueError("第 %d 行必须为对象" % (index + 1))
+            child_uid = str(row.get("child_uid") or "").strip()
+            part_id = str(row.get("part_id") or "").strip()
+            if not child_uid or not part_id:
+                raise ValueError("第 %d 行 child_uid 和 part_id 不能为空" % (index + 1))
+            try:
+                level = int(row.get("bom_level", 0))
+            except (TypeError, ValueError):
+                raise ValueError("第 %d 行 bom_level 必须为非负整数" % (index + 1))
+            if level < 0:
+                raise ValueError("第 %d 行 bom_level 必须为非负整数" % (index + 1))
+            row["bom_level"] = level
+            child_uids.append(child_uid)
+        if len(child_uids) != len(set(child_uids)):
+            raise ValueError("child_uid 必须唯一")
+        known = set(child_uids)
+        roots = 0
+        for index, row in enumerate(rows):
+            parent_uid = str(row.get("parent_uid") or "").strip()
+            child_uid = str(row.get("child_uid") or "").strip()
+            if not parent_uid:
+                roots += 1
+                if int(row.get("bom_level") or 0) != 0:
+                    raise ValueError("第 %d 行无父节点时 bom_level 必须为 0" % (index + 1))
+            elif parent_uid == child_uid or parent_uid not in known:
+                raise ValueError("第 %d 行 parent_uid 不存在或指向自身" % (index + 1))
+        if roots != 1:
+            raise ValueError("BOM 必须且只能有一个根节点")
+
+    def persist_fixture(name, rows):
+        validate_fixture_rows(rows)
+        path = os.path.join(FIXTURE_DIR, name)
+        history_dir = os.path.join(FIXTURE_DIR, ".history")
+        os.makedirs(history_dir, mode=0o700, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%dT%H%M%S%f")
+        backup_name = "%s.%s.%s.bak" % (name, stamp, uuid.uuid4().hex[:8])
+        backup_path = os.path.join(history_dir, backup_name)
+        if os.path.exists(path):
+            shutil.copy2(path, backup_path)
+            os.chmod(backup_path, 0o600)
+        temp_path = "%s.tmp.%s" % (path, uuid.uuid4().hex)
+        try:
+            with open(temp_path, "w", encoding="utf-8") as handle:
+                json.dump(rows, handle, ensure_ascii=False, indent=1)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(temp_path, 0o644)
+            os.replace(temp_path, path)
+        finally:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
+        return backup_name if os.path.exists(backup_path) else ""
+
     fixtures = load_fixtures()
 
     # 兼容旧逻辑：LITHO-001（FIXTURE_BOM_FILENAME）的 BOM 接口按原始字节返回。
@@ -355,8 +450,9 @@ def create_app():
     register_fixture_item()
 
     def fixture_bom_response():
-        if fixture_raw is not None:
-            return Response(fixture_raw, mimetype="application/json")
+        current = load_fixtures().get(FIXTURE_BOM_FILENAME)
+        if current is not None:
+            return Response(current["raw"], mimetype="application/json")
         return api_err(500, "BOM fixture not loaded")
 
     # ------------------------------------------------------------ helpers
@@ -423,11 +519,10 @@ def create_app():
         return children
 
     def get_fixture_or_error(name):
-        """只读 fixture 查找：不触碰文件系统，仅返回启动时注册的数据。
-        非法名称 -> 400；合法但不存在 -> 404；两者都明确返回结构化错误。"""
+        """安全查找 fixture；非法名称 400，合法但不存在 404。"""
         if not fixture_name_ok(name):
             return None, api_err(400, "Invalid fixture name: " + str(name))
-        fixture = fixtures.get(name)
+        fixture = load_fixtures().get(name)
         if fixture is None:
             return None, api_err(404, "Fixture not found: " + str(name))
         return fixture, None
@@ -459,6 +554,23 @@ def create_app():
 
     # --------------------------------------------------------- auth (opt)
     token = os.environ.get("MOCKTC_API_TOKEN", "").strip()
+    admin_token = os.environ.get("MOCKTC_ADMIN_TOKEN", "").strip()
+
+    def supplied_admin_token():
+        supplied = request.headers.get("X-MockTC-Admin-Token", "").strip()
+        if not supplied:
+            authorization = request.headers.get("Authorization", "")
+            if authorization.startswith("Bearer "):
+                supplied = authorization[7:].strip()
+        return supplied
+
+    def require_admin():
+        if not admin_token:
+            return api_err(503, "MockTC 管理写入功能尚未配置管理员令牌")
+        supplied = supplied_admin_token()
+        if not supplied or not hmac.compare_digest(supplied, admin_token):
+            return api_err(403, "管理员令牌无效")
+        return None
 
     @app.before_request
     def check_token():
@@ -471,7 +583,10 @@ def create_app():
             supplied = ""
         if not supplied:
             supplied = request.args.get("token", "")
-        if supplied != token:
+        admin_supplied = supplied_admin_token()
+        if supplied != token and not (
+            admin_token and admin_supplied and hmac.compare_digest(admin_supplied, admin_token)
+        ):
             return api_err(401, "Unauthorized: missing or invalid API token")
         return None
 
@@ -480,7 +595,7 @@ def create_app():
     def start_logging():
         g.request_started = time.time()
         g.request_body = ""
-        if request.path.startswith(API_PREFIX) and request.method in ("POST", "PUT", "PATCH"):
+        if request.path.startswith(API_PREFIX) and request.method in ("POST", "PUT", "PATCH", "DELETE"):
             try:
                 g.request_body = request.get_data(as_text=True)[:MAX_LOG_BODY]
             except Exception:
@@ -523,6 +638,7 @@ def create_app():
     # -------------------------------------------------------------- health
     @app.route(API_PREFIX + "/health", methods=["GET"])
     def health():
+        current_fixtures = load_fixtures()
         return api_ok(
             {
                 "service": SERVICE_NAME,
@@ -531,8 +647,8 @@ def create_app():
                 "time": now_iso(),
                 "status": "up",
                 "fixtures": {
-                    "total": len(fixtures),
-                    "names": [f["meta"]["name"] for f in fixtures.values()],
+                    "total": len(current_fixtures),
+                    "names": [f["meta"]["name"] for f in current_fixtures.values()],
                 },
             }
         )
@@ -582,6 +698,9 @@ def create_app():
 
     @app.route(API_PREFIX + "/items", methods=["POST"])
     def create_item():
+        denied = require_admin()
+        if denied is not None:
+            return denied
         payload = request.get_json(silent=True) or {}
         item_id = str(payload.get("item_id") or "").strip()
         item_name = str(payload.get("item_name") or "").strip()
@@ -591,6 +710,7 @@ def create_app():
         if db.execute("SELECT 1 FROM items WHERE item_id=?", (item_id,)).fetchone():
             return api_err(409, "item_id 已存在: " + item_id)
         uid = "item-" + uuid.uuid4().hex[:10]
+        backup_database()
         db.execute(
             "INSERT INTO items (uid, item_id, item_name, item_type, project, owner, status, created) "
             "VALUES (?,?,?,?,?,?,?,?)",
@@ -627,6 +747,35 @@ def create_app():
         if row is None:
             return api_err(404, "Item not found: " + uid)
         return api_ok(serialize_item(row))
+
+    @app.route(API_PREFIX + "/items/<uid>", methods=["PATCH"])
+    def update_item(uid):
+        denied = require_admin()
+        if denied is not None:
+            return denied
+        row = item_row(uid)
+        if row is None:
+            return api_err(404, "Item not found: " + uid)
+        payload = request.get_json(silent=True) or {}
+        allowed = ("item_id", "item_name", "item_type", "project", "owner", "status")
+        updates = {key: str(payload[key]).strip() for key in allowed if key in payload}
+        if not updates:
+            return api_err(400, "没有可更新的物料字段")
+        if "item_id" in updates and not updates["item_id"]:
+            return api_err(400, "item_id 不能为空")
+        if "item_name" in updates and not updates["item_name"]:
+            return api_err(400, "item_name 不能为空")
+        try:
+            backup_database()
+            get_db().execute(
+                "UPDATE items SET %s WHERE uid=?" % ",".join(key + "=?" for key in updates),
+                list(updates.values()) + [uid],
+            )
+            get_db().commit()
+        except sqlite3.IntegrityError:
+            get_db().rollback()
+            return api_err(409, "item_id 已存在")
+        return api_ok(serialize_item(item_row(uid)))
 
     @app.route(API_PREFIX + "/items/<uid>/revisions", methods=["GET"])
     def list_revisions(uid):
@@ -723,6 +872,98 @@ def create_app():
         line["children"] = []
         return api_ok(line)
 
+    @app.route(API_PREFIX + "/bomlines/<uid>", methods=["PATCH"])
+    def update_bomline(uid):
+        denied = require_admin()
+        if denied is not None:
+            return denied
+        row = get_db().execute("SELECT * FROM bom_lines WHERE uid=?", (uid,)).fetchone()
+        if row is None:
+            return api_err(404, "BOM line not found: " + uid)
+        payload = request.get_json(silent=True) or {}
+        allowed = ("position", "sequence", "quantity", "unit", "child_item_uid", "notes")
+        updates = {key: payload[key] for key in allowed if key in payload}
+        if not updates:
+            return api_err(400, "没有可更新的 BOM 字段")
+        try:
+            if "sequence" in updates:
+                updates["sequence"] = int(updates["sequence"])
+            if "quantity" in updates:
+                updates["quantity"] = float(updates["quantity"])
+                if updates["quantity"] <= 0:
+                    raise ValueError("quantity 必须大于 0")
+        except (TypeError, ValueError) as exc:
+            return api_err(400, str(exc))
+        if "child_item_uid" in updates and item_row(str(updates["child_item_uid"])) is None:
+            return api_err(400, "child_item_uid 不存在")
+        backup_database()
+        get_db().execute(
+            "UPDATE bom_lines SET %s WHERE uid=?" % ",".join(key + "=?" for key in updates),
+            list(updates.values()) + [uid],
+        )
+        get_db().commit()
+        return get_bomline(uid)
+
+    @app.route(API_PREFIX + "/items/<uid>/bomlines", methods=["POST"])
+    def create_bomline(uid):
+        denied = require_admin()
+        if denied is not None:
+            return denied
+        item = item_row(uid)
+        if item is None:
+            return api_err(404, "Item not found: " + uid)
+        payload = request.get_json(silent=True) or {}
+        child_uid = str(payload.get("child_item_uid") or "").strip()
+        if not child_uid or item_row(child_uid) is None:
+            return api_err(400, "child_item_uid 必须指向已存在物料")
+        try:
+            quantity = float(payload.get("quantity", 1))
+            sequence = int(payload.get("sequence", 0))
+            if quantity <= 0:
+                raise ValueError("quantity 必须大于 0")
+        except (TypeError, ValueError) as exc:
+            return api_err(400, str(exc))
+        db = get_db()
+        backup_database()
+        header = header_for_item(uid)
+        if header is None:
+            header_uid = "bom-" + uuid.uuid4().hex[:12]
+            revision = revision_rows(uid)
+            revision_uid = revision[-1]["uid"] if revision else None
+            db.execute(
+                "INSERT INTO bom_headers(uid,item_uid,revision_uid,name,description) VALUES(?,?,?,?,?)",
+                (header_uid, uid, revision_uid, "%s %s BOM" % (item["item_id"], item["item_name"]), ""),
+            )
+        else:
+            header_uid = header["uid"]
+        line_uid = "bl-" + uuid.uuid4().hex[:12]
+        db.execute(
+            "INSERT INTO bom_lines(uid,bom_uid,parent_bomline_uid,sequence,position,quantity,unit,child_item_uid,notes) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
+            (line_uid, header_uid, None, sequence, str(payload.get("position") or ""), quantity,
+             str(payload.get("unit") or "EA"), child_uid, str(payload.get("notes") or "")),
+        )
+        db.commit()
+        response = get_bomline(line_uid)
+        if isinstance(response, tuple):
+            response[0].status_code = 201
+        else:
+            response.status_code = 201
+        return response
+
+    @app.route(API_PREFIX + "/bomlines/<uid>", methods=["DELETE"])
+    def delete_bomline(uid):
+        denied = require_admin()
+        if denied is not None:
+            return denied
+        row = get_db().execute("SELECT * FROM bom_lines WHERE uid=?", (uid,)).fetchone()
+        if row is None:
+            return api_err(404, "BOM line not found: " + uid)
+        backup_database()
+        get_db().execute("DELETE FROM bom_lines WHERE uid=?", (uid,))
+        get_db().commit()
+        return api_ok({"deleted": uid})
+
     @app.route(API_PREFIX + "/bomlines/<uid>/children", methods=["GET"])
     def bomline_children(uid):
         row = get_db().execute(
@@ -740,10 +981,11 @@ def create_app():
     # --------------------------------------------------------- fixture API
     @app.route(API_PREFIX + "/fixtures", methods=["GET"])
     def list_fixtures():
+        current_fixtures = load_fixtures()
         return api_ok(
             {
-                "total": len(fixtures),
-                "fixtures": [f["meta"] for f in fixtures.values()],
+                "total": len(current_fixtures),
+                "fixtures": [f["meta"] for f in current_fixtures.values()],
             }
         )
 
@@ -866,13 +1108,128 @@ def create_app():
             }
         )
 
+    fixture_editable_fields = (
+        "bom_level", "parent_uid", "part_id", "part_name", "revision_id",
+        "quantity", "unit", "bom_number", "bom_alt", "item_category",
+        "item_no", "scrap_rate", "plant", "usage",
+    )
+
+    @app.route(API_PREFIX + "/fixtures/<name>/rows/<child_uid>", methods=["PATCH"])
+    def update_fixture_row(name, child_uid):
+        denied = require_admin()
+        if denied is not None:
+            return denied
+        payload = request.get_json(silent=True) or {}
+        fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else payload
+        updates = {key: fields[key] for key in fixture_editable_fields if key in fields}
+        if not updates:
+            return api_err(400, "没有可更新的 BOM 字段")
+        if any(isinstance(value, (dict, list)) for value in updates.values()):
+            return api_err(400, "BOM 字段只接受标量值")
+        with fixture_write_lock():
+            fixture, err = get_fixture_or_error(name)
+            if err is not None:
+                return err
+            rows = [dict(row) for row in fixture["rows"]]
+            target = next((row for row in rows if str(row.get("child_uid") or "") == child_uid), None)
+            if target is None:
+                return api_err(404, "BOM row not found: " + child_uid)
+            target.update(updates)
+            try:
+                backup = persist_fixture(name, rows)
+            except ValueError as exc:
+                return api_err(400, str(exc))
+        return api_ok({"fixture": name, "updated": child_uid, "row": target, "backup": backup})
+
+    @app.route(API_PREFIX + "/fixtures/<name>/rows", methods=["POST"])
+    def create_fixture_row(name):
+        denied = require_admin()
+        if denied is not None:
+            return denied
+        payload = request.get_json(silent=True) or {}
+        part_id = str(payload.get("part_id") or "").strip()
+        parent_uid = str(payload.get("parent_uid") or "").strip()
+        if not part_id or not parent_uid:
+            return api_err(400, "part_id 和 parent_uid 为必填项")
+        with fixture_write_lock():
+            fixture, err = get_fixture_or_error(name)
+            if err is not None:
+                return err
+            rows = [dict(row) for row in fixture["rows"]]
+            parent = next((row for row in rows if str(row.get("child_uid") or "") == parent_uid), None)
+            if parent is None:
+                return api_err(400, "parent_uid 不存在")
+            child_uid = str(payload.get("child_uid") or "").strip() or (
+                "TC-%s-%s" % (re.sub(r"[^A-Za-z0-9_-]", "-", part_id), uuid.uuid4().hex[:8])
+            )
+            row = {key: "" for key in fixture["meta"]["fields"]}
+            row.update({
+                "bom_level": int(parent.get("bom_level") or 0) + 1,
+                "parent_uid": parent_uid,
+                "child_uid": child_uid,
+                "part_id": part_id,
+                "part_name": str(payload.get("part_name") or ""),
+                "revision_id": str(payload.get("revision_id") or parent.get("revision_id") or ""),
+                "quantity": payload.get("quantity", "1"),
+                "unit": str(payload.get("unit") or "EA"),
+            })
+            for key in fixture_editable_fields:
+                if key in payload:
+                    if key == "bom_level" and str(payload[key]).strip() == "":
+                        continue
+                    row[key] = payload[key]
+            rows.append(row)
+            try:
+                backup = persist_fixture(name, rows)
+            except ValueError as exc:
+                return api_err(400, str(exc))
+        return jsonify({"status": 201, "message": "BOM row created", "data": {
+            "fixture": name, "row": row, "backup": backup,
+        }}), 201
+
+    @app.route(API_PREFIX + "/fixtures/<name>/rows/<child_uid>", methods=["DELETE"])
+    def delete_fixture_row(name, child_uid):
+        denied = require_admin()
+        if denied is not None:
+            return denied
+        cascade = (request.args.get("cascade") or "").lower() in ("1", "true", "yes", "on")
+        with fixture_write_lock():
+            fixture, err = get_fixture_or_error(name)
+            if err is not None:
+                return err
+            rows = [dict(row) for row in fixture["rows"]]
+            target = next((row for row in rows if str(row.get("child_uid") or "") == child_uid), None)
+            if target is None:
+                return api_err(404, "BOM row not found: " + child_uid)
+            if not str(target.get("parent_uid") or ""):
+                return api_err(400, "根节点不能删除")
+            descendants = set([child_uid])
+            changed = True
+            while changed:
+                changed = False
+                for row in rows:
+                    uid = str(row.get("child_uid") or "")
+                    if str(row.get("parent_uid") or "") in descendants and uid not in descendants:
+                        descendants.add(uid)
+                        changed = True
+            if len(descendants) > 1 and not cascade:
+                return api_err(409, "该节点包含 %d 个下级，请使用 cascade=1 明确级联删除" % (len(descendants) - 1))
+            kept = [row for row in rows if str(row.get("child_uid") or "") not in descendants]
+            try:
+                backup = persist_fixture(name, kept)
+            except ValueError as exc:
+                return api_err(400, str(exc))
+        return api_ok({"fixture": name, "deleted": sorted(descendants), "backup": backup})
+
     # -------------------------------------------------------------- UI pages
     @app.route("/")
     def index():
         db = get_db()
+        current_fixtures = load_fixtures()
         counts = {
             "items": db.execute("SELECT COUNT(*) AS c FROM items").fetchone()["c"],
             "bom_lines": db.execute("SELECT COUNT(*) AS c FROM bom_lines").fetchone()["c"],
+            "fixture_rows": sum(f["meta"]["rows"] for f in current_fixtures.values()),
             "logs": db.execute("SELECT COUNT(*) AS c FROM api_logs").fetchone()["c"],
         }
         return render_template(
@@ -899,7 +1256,34 @@ def create_app():
             "FROM items i ORDER BY i.item_id"
         ).fetchall()
         return render_template(
-            "data.html", service=SERVICE_NAME, items=rows, api_prefix=API_PREFIX
+            "data.html", service=SERVICE_NAME, items=rows, api_prefix=API_PREFIX,
+            fixtures=[f["meta"] for f in load_fixtures().values()],
+            editable=bool(admin_token),
+        )
+
+    @app.route("/data/fixture/<name>")
+    def data_fixture(name):
+        fixture, err = get_fixture_or_error(name)
+        if err is not None:
+            return render_template("error.html", service=SERVICE_NAME, message="BOM 数据集不存在: " + name), 404
+        q = (request.args.get("q") or "").strip().lower()
+        try:
+            page = max(1, int(request.args.get("page", 1)))
+            per_page = max(20, min(200, int(request.args.get("per_page", 100))))
+        except (TypeError, ValueError):
+            page, per_page = 1, 100
+        rows = [enrich_fixture_row(row, fixture) for row in fixture["rows"]]
+        if q:
+            rows = [row for row in rows if q in " ".join(str(value) for value in row.values()).lower()]
+        total = len(rows)
+        pages = max(1, (total + per_page - 1) // per_page)
+        page = min(page, pages)
+        shown = rows[(page - 1) * per_page : page * per_page]
+        return render_template(
+            "fixture_data.html", service=SERVICE_NAME, api_prefix=API_PREFIX,
+            fixture=fixture["meta"], rows=shown, total=total, q=request.args.get("q", ""),
+            page=page, pages=pages, per_page=per_page, editable=bool(admin_token),
+            editable_fields=fixture_editable_fields,
         )
 
     @app.route("/data/item/<uid>")
@@ -914,6 +1298,8 @@ def create_app():
             item=serialize_item(row),
             bom_lines=lines,
             api_prefix=API_PREFIX,
+            all_items=[serialize_item(r) for r in get_db().execute("SELECT * FROM items ORDER BY item_id").fetchall()],
+            editable=bool(admin_token),
         )
 
     @app.route("/logs")

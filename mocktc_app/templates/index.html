@@ -14,15 +14,19 @@
 
 <section class="cards">
   <div class="card">
-    <div class="card-num">{{ counts.items }}</div>
+    <div class="card-num">{{ counts["items"] }}</div>
     <div class="card-label">物料（Items）</div>
   </div>
   <div class="card">
-    <div class="card-num">{{ counts.bom_lines }}</div>
+    <div class="card-num">{{ counts["bom_lines"] }}</div>
     <div class="card-label">BOM 行（BOM Lines）</div>
   </div>
   <div class="card">
-    <div class="card-num">{{ counts.logs }}</div>
+    <div class="card-num">{{ counts["fixture_rows"] }}</div>
+    <div class="card-label">外部 BOM 数据行</div>
+  </div>
+  <div class="card">
+    <div class="card-num">{{ counts["logs"] }}</div>
     <div class="card-label">接口调用记录</div>
   </div>
   <div class="card">

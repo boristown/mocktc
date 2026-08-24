@@ -13,6 +13,7 @@
     </tbody>
   </table>
   <p>
+    {% if editable %}<button class="btn btn-primary" type="button" id="standard-add">新增组件</button>{% endif %}
     <a class="btn btn-sm" href="{{ api_prefix }}/items/{{ item.uid }}/bom/expand" target="_blank">查看原始 JSON</a>
     <a class="btn btn-sm" href="/data">返回物料列表</a>
   </p>
@@ -31,6 +32,7 @@
         <td>{{ line.quantity }}</td>
         <td>{{ line.unit }}</td>
         <td>{{ line.notes }}</td>
+        {% if editable %}<td><button type="button" class="btn btn-xs standard-edit" data-line="{{ line|tojson|forceescape }}">编辑</button></td>{% endif %}
       </tr>
       {%- if line.children -%}
         {{ bom_rows(line.children, level + 1) }}
@@ -39,7 +41,7 @@
   {%- endmacro %}
   <table class="table bom">
     <thead>
-      <tr><th>位置</th><th>物料编号</th><th>名称</th><th>类型</th><th>数量</th><th>单位</th><th>备注</th></tr>
+      <tr><th>位置</th><th>物料编号</th><th>名称</th><th>类型</th><th>数量</th><th>单位</th><th>备注</th>{% if editable %}<th>操作</th>{% endif %}</tr>
     </thead>
     <tbody>
       {{ bom_rows(bom_lines, 0) }}
@@ -49,4 +51,22 @@
   <p>该物料没有已发布的 BOM。</p>
   {% endif %}
 </section>
+{% if editable %}
+<dialog id="standard-editor" class="editor-dialog" data-item-uid="{{ item.uid }}">
+  <form method="dialog" id="standard-form">
+    <div class="dialog-head"><div><p class="eyebrow">标准 BOM 维护</p><h3 id="standard-editor-title">编辑组件</h3></div><button class="icon-btn" value="cancel">×</button></div>
+    <input type="hidden" name="line_uid">
+    <div class="editor-grid">
+      <label><span>子物料</span><select name="child_item_uid">{% for option in all_items %}<option value="{{ option.uid }}">{{ option.item_id }} · {{ option.item_name }}</option>{% endfor %}</select></label>
+      <label><span>位置</span><input name="position"></label>
+      <label><span>顺序</span><input name="sequence" type="number"></label>
+      <label><span>数量</span><input name="quantity" type="number" step="any" min="0.000001"></label>
+      <label><span>单位</span><input name="unit"></label>
+      <label class="wide"><span>备注</span><input name="notes"></label>
+    </div>
+    <p class="admin-token-row"><label><span>管理员令牌</span><input class="admin-token-input" type="password" autocomplete="current-password" placeholder="仅保存在当前浏览器会话"></label></p>
+    <div class="dialog-actions"><button type="button" class="btn btn-danger" id="standard-delete">删除组件</button><span class="spacer"></span><button class="btn" value="cancel">取消</button><button type="button" class="btn btn-primary" id="standard-save">保存</button></div>
+  </form>
+</dialog>
+{% endif %}
 {% endblock %}

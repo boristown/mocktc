@@ -45,6 +45,14 @@ install -m 644 "$REPO_ROOT/mocktc_app/templates/"*.html "$APP_ROOT/templates/"
 install -m 644 "$REPO_ROOT/mocktc_app/static/"*.css "$REPO_ROOT/mocktc_app/static/"*.js "$APP_ROOT/static/" 2>/dev/null || true
 install -m 644 "$REPO_ROOT/mocktc_app/fixtures/"*.json "$APP_ROOT/fixtures/" 2>/dev/null || true
 
+# 管理写接口使用独立令牌；首次部署生成，后续部署保留，不写入 Git 或日志。
+if [[ ! -s "$APP_ROOT/.env" ]]; then
+  umask 077
+  "$PY_BIN" -c 'import secrets; print("MOCKTC_ADMIN_TOKEN=" + secrets.token_urlsafe(32))' \
+    > "$APP_ROOT/.env"
+fi
+chmod 600 "$APP_ROOT/.env"
+
 # 4. systemd units + auto-start
 install -m 644 "$REPO_ROOT/systemd/mocktc.service" /etc/systemd/system/mocktc.service
 systemctl daemon-reload

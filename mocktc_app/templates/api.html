@@ -38,6 +38,10 @@
       <tr><td><span class="m m-get">GET</span></td><td><code>{{ api_prefix }}/fixtures/&lt;name&gt;</code></td><td>完整 fixture 读取（只读）</td><td>raw=1 返回原始字节</td></tr>
       <tr><td><span class="m m-get">GET</span></td><td><code>{{ api_prefix }}/fixtures/&lt;name&gt;/query</code></td><td>按物料/字段查询（只读）</td><td>part_id, part_name, q, bom_level, revision_id, parent_id, child_uid, parent_uid, exact, limit, offset</td></tr>
       <tr><td><span class="m m-get">GET</span></td><td><code>{{ api_prefix }}/fixtures/&lt;name&gt;/materials/&lt;part_id&gt;</code></td><td>物料详情（只读，不存在 404）</td><td>-</td></tr>
+      <tr><td><span class="m m-patch">PATCH</span></td><td><code>{{ api_prefix }}/fixtures/&lt;name&gt;/rows/&lt;child_uid&gt;</code></td><td>修改外部 BOM 节点（管理员）</td><td>JSON 字段</td></tr>
+      <tr><td><span class="m m-post">POST</span></td><td><code>{{ api_prefix }}/fixtures/&lt;name&gt;/rows</code></td><td>新增外部 BOM 子节点（管理员）</td><td>parent_uid, part_id, quantity...</td></tr>
+      <tr><td><span class="m m-delete">DELETE</span></td><td><code>{{ api_prefix }}/fixtures/&lt;name&gt;/rows/&lt;child_uid&gt;</code></td><td>删除外部 BOM 节点（管理员）</td><td>cascade=1</td></tr>
+      <tr><td><span class="m m-patch">PATCH</span></td><td><code>{{ api_prefix }}/bomlines/&lt;uid&gt;</code></td><td>修改标准 BOM 行（管理员）</td><td>position, quantity, unit...</td></tr>
     </tbody>
   </table>
 </section>
