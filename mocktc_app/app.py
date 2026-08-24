@@ -23,8 +23,13 @@ from contextlib import contextmanager
 from datetime import datetime
 
 import fcntl
+from io import BytesIO
 
-from flask import Flask, Response, g, jsonify, render_template, request
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
+
+from flask import Flask, Response, g, jsonify, render_template, request, send_file
 
 
 SERVICE_NAME = "Mock Teamcenter"
@@ -544,6 +549,42 @@ def create_app():
             payload["data"] = extra
         return jsonify(payload), code
 
+    def excel_value(value):
+        if value is None:
+            return ""
+        if isinstance(value, (dict, list)):
+            value = json.dumps(value, ensure_ascii=False)
+        if isinstance(value, str) and value[:1] in ("=", "+", "-", "@"):
+            return "'" + value
+        return value
+
+    def append_excel_sheet(workbook, title, rows):
+        rows = [dict(row) for row in rows]
+        fields = []
+        for row in rows:
+            for key in row:
+                if key not in fields:
+                    fields.append(key)
+        if not fields:
+            fields = ["说明"]
+            rows = [{"说明": "无数据"}]
+        sheet = workbook.create_sheet(title[:31])
+        sheet.append(fields)
+        for cell in sheet[1]:
+            cell.font = Font(bold=True, color="17324D")
+            cell.fill = PatternFill("solid", fgColor="DDEFFD")
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        for row in rows:
+            sheet.append([excel_value(row.get(field)) for field in fields])
+        sheet.freeze_panes = "A2"
+        sheet.auto_filter.ref = sheet.dimensions
+        for column, field in enumerate(fields, 1):
+            width = len(str(field)) + 2
+            for row_number in range(2, min(sheet.max_row, 250) + 1):
+                width = max(width, len(str(sheet.cell(row_number, column).value or "")) + 2)
+            sheet.column_dimensions[get_column_letter(column)].width = min(max(width, 10), 42)
+        return sheet
+
     def parse_depth():
         raw = request.args.get("depth", "0")
         try:
@@ -1003,6 +1044,63 @@ def create_app():
                 "fields": fixture["meta"]["fields"],
                 "items": fixture["rows"],
             }
+        )
+
+    @app.route(API_PREFIX + "/fixtures/<name>/download", methods=["GET"])
+    def download_fixture_file(name):
+        fixture, err = get_fixture_or_error(name)
+        if err is not None:
+            return err
+        response = Response(fixture["raw"], mimetype="application/json")
+        response.headers["Content-Disposition"] = 'attachment; filename="%s"' % name
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
+
+    @app.route(API_PREFIX + "/export.xlsx", methods=["GET"])
+    def export_all_data_xlsx():
+        """Download all standard and fixture BOM data in one Excel workbook."""
+        db = get_db()
+        items = [serialize_item(row) for row in db.execute(
+            "SELECT * FROM items ORDER BY item_id").fetchall()]
+        standard_rows = [dict(row) for row in db.execute(
+            "SELECT bh.uid AS bom_uid,root.item_id AS root_item_id,root.item_name AS root_item_name,"
+            "bl.uid AS bomline_uid,bl.sequence,bl.position,bl.quantity,bl.unit,"
+            "child.item_id AS child_item_id,child.item_name AS child_item_name,"
+            "child.item_type AS child_item_type,bl.notes "
+            "FROM bom_lines bl JOIN bom_headers bh ON bh.uid=bl.bom_uid "
+            "JOIN items root ON root.uid=bh.item_uid JOIN items child ON child.uid=bl.child_item_uid "
+            "ORDER BY root.item_id,bl.sequence,bl.uid"
+        ).fetchall()]
+        current_fixtures = load_fixtures()
+        workbook = Workbook()
+        workbook.remove(workbook.active)
+        append_excel_sheet(workbook, "导出说明", [{
+            "系统": SERVICE_NAME, "版本": SERVICE_VERSION, "导出时间": now_iso(),
+            "物料数": len(items), "标准BOM行数": len(standard_rows),
+            "外部数据集数": len(current_fixtures),
+            "外部BOM总行数": sum(item["meta"]["rows"] for item in current_fixtures.values()),
+        }])
+        append_excel_sheet(workbook, "物料清单", items)
+        append_excel_sheet(workbook, "标准BOM", standard_rows)
+        used_titles = {"导出说明", "物料清单", "标准BOM"}
+        for index, fixture in enumerate(current_fixtures.values(), 1):
+            base_title = "外部BOM_%s" % (fixture["meta"].get("item_id") or index)
+            title = base_title[:31]
+            suffix = 2
+            while title in used_titles:
+                tail = "_%d" % suffix
+                title = base_title[:31 - len(tail)] + tail
+                suffix += 1
+            used_titles.add(title)
+            append_excel_sheet(workbook, title, fixture["rows"])
+        output = BytesIO()
+        workbook.save(output)
+        output.seek(0)
+        filename = "mocktc-all-data-%s.xlsx" % datetime.now().strftime("%Y%m%d-%H%M%S")
+        return send_file(
+            output, as_attachment=True, download_name=filename,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            max_age=0,
         )
 
     @app.route(API_PREFIX + "/fixtures/<name>/query", methods=["GET"])

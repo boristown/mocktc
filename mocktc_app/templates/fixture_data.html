@@ -9,7 +9,8 @@
   </div>
   <div class="hero-actions">
     {% if editable %}<button class="btn btn-primary" id="fixture-add">新增子节点</button>{% endif %}
-    <a class="btn" href="{{ api_prefix }}/fixtures/{{ fixture.name }}?raw=1" target="_blank">原始 JSON</a>
+    <a class="btn" href="{{ api_prefix }}/fixtures/{{ fixture.name }}/download">下载 JSON</a>
+    <a class="btn" href="{{ api_prefix }}/fixtures/{{ fixture.name }}?raw=1" target="_blank">预览 JSON</a>
     <a class="btn" href="/data">返回数据集</a>
   </div>
 </section>

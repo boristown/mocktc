@@ -4,7 +4,10 @@ import os
 import shutil
 import tempfile
 import unittest
+from io import BytesIO
 from unittest import mock
+
+from openpyxl import load_workbook
 
 from mocktc_app import app as app_module
 
@@ -101,6 +104,26 @@ class MockTcMaintenanceTestCase(unittest.TestCase):
         deleted = self.client.delete("/tc/v1/bomlines/" + line_uid, headers=self.headers)
         self.assertEqual(deleted.status_code, 200)
         self.assertEqual(self.client.get("/tc/v1/bomlines/" + line_uid).status_code, 404)
+
+    def test_one_click_excel_and_fixture_json_downloads(self):
+        page = self.client.get("/data")
+        self.assertIn("一键下载全部数据".encode("utf-8"), page.data)
+        exported = self.client.get("/tc/v1/export.xlsx")
+        self.assertEqual(exported.status_code, 200)
+        self.assertIn("attachment", exported.headers.get("Content-Disposition", ""))
+        self.assertIn("mocktc-all-data-", exported.headers.get("Content-Disposition", ""))
+        workbook = load_workbook(BytesIO(exported.data), read_only=True, data_only=True)
+        self.assertEqual(
+            workbook.sheetnames,
+            ["导出说明", "物料清单", "标准BOM", "外部BOM_ROOT-1"],
+        )
+        self.assertGreaterEqual(workbook["物料清单"].max_row, 22)
+        self.assertEqual(workbook["外部BOM_ROOT-1"].max_row, 4)
+        downloaded = self.client.get("/tc/v1/fixtures/editable.json/download")
+        self.assertEqual(downloaded.status_code, 200)
+        self.assertEqual(downloaded.content_type, "application/json")
+        self.assertIn('attachment; filename="editable.json"', downloaded.headers["Content-Disposition"])
+        self.assertEqual(json.loads(downloaded.data), self.rows)
 
 
 if __name__ == "__main__":

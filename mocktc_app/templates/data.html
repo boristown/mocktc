@@ -7,7 +7,10 @@
       <h2>外部 BOM 数据集</h2>
       <p>可查看完整层级、搜索任意字段；配置管理员令牌后可新增、编辑或删除节点。</p>
     </div>
-    {% if editable %}<span class="badge badge-ready">维护功能已启用</span>{% endif %}
+    <div class="section-actions">
+      <a class="btn btn-primary" href="{{ api_prefix }}/export.xlsx">一键下载全部数据</a>
+      {% if editable %}<span class="badge badge-ready">维护功能已启用</span>{% endif %}
+    </div>
   </div>
   <div class="dataset-grid">
     {% for fixture in fixtures %}
