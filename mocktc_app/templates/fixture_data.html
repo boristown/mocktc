@@ -63,7 +63,7 @@
       <label><span>{{ field }}</span><input name="{{ field }}"></label>
       {% endfor %}
     </div>
-    <p class="admin-token-row"><label><span>管理员令牌</span><input id="admin-token" type="password" autocomplete="current-password" placeholder="仅保存在当前浏览器会话"></label></p>
+    <p class="admin-token-row"><label><span>管理员令牌（首次授权时填写）</span><input id="admin-token" type="password" autocomplete="current-password" placeholder="授权后 8 小时内无需重复填写"></label></p>
     <div class="dialog-actions"><button type="button" class="btn btn-danger" id="fixture-delete">删除节点</button><span class="spacer"></span><button class="btn" value="cancel">取消</button><button type="button" class="btn btn-primary" id="fixture-save">保存修改</button></div>
   </form>
 </dialog>

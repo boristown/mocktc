@@ -70,6 +70,22 @@ class MockTcMaintenanceTestCase(unittest.TestCase):
         self.assertEqual(readback["data"]["items"][0]["part_name"], "已修改子件")
         self.assertTrue(os.path.isfile(os.path.join(self.fixture_dir, ".history", payload["backup"])))
 
+    def test_browser_admin_session_saves_and_records_change_history(self):
+        authorized = self.client.post(
+            "/tc/v1/admin/session", json={"token": "test-admin-token"},
+        )
+        self.assertEqual(authorized.status_code, 200, authorized.get_data(as_text=True))
+        self.assertIn("HttpOnly", authorized.headers.get("Set-Cookie", ""))
+        changed = self.client.patch(
+            "/tc/v1/fixtures/editable.json/rows/CHILD-A", json={"quantity": "9"},
+        )
+        self.assertEqual(changed.status_code, 200, changed.get_data(as_text=True))
+        history = self.client.get("/changes")
+        self.assertEqual(history.status_code, 200)
+        self.assertIn(b"editable.json:CHILD-A", history.data)
+        self.assertIn(b'&#34;quantity&#34;: &#34;2&#34;', history.data)
+        self.assertIn(b'&#34;quantity&#34;: &#34;9&#34;', history.data)
+
     def test_fixture_add_and_cascade_delete_preserve_valid_tree(self):
         created = self.client.post(
             "/tc/v1/fixtures/editable.json/rows", headers=self.headers,

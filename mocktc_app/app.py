@@ -13,6 +13,7 @@ Runs on Python 3.6+ / Flask 2.0+.
 
 import json
 import hmac
+import hashlib
 import os
 import re
 import shutil
@@ -128,6 +129,18 @@ def create_app():
                 is_api        INTEGER NOT NULL DEFAULT 1
             );
             CREATE INDEX IF NOT EXISTS idx_logs_ts ON api_logs(ts DESC);
+            CREATE TABLE IF NOT EXISTS change_history (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                ts          TEXT NOT NULL,
+                action      TEXT NOT NULL,
+                target_type TEXT NOT NULL,
+                target_id   TEXT NOT NULL,
+                before_json TEXT NOT NULL DEFAULT '{}',
+                after_json  TEXT NOT NULL DEFAULT '{}',
+                backup      TEXT NOT NULL DEFAULT '',
+                client_ip   TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_change_history_ts ON change_history(ts DESC);
             """
         )
         conn.commit()
@@ -596,6 +609,24 @@ def create_app():
     # --------------------------------------------------------- auth (opt)
     token = os.environ.get("MOCKTC_API_TOKEN", "").strip()
     admin_token = os.environ.get("MOCKTC_ADMIN_TOKEN", "").strip()
+    admin_cookie_name = "mocktc_admin_session"
+
+    def admin_cookie_value():
+        issued = str(int(time.time()))
+        signature = hmac.new(admin_token.encode("utf-8"), issued.encode("ascii"), hashlib.sha256).hexdigest()
+        return issued + "." + signature
+
+    def valid_admin_cookie():
+        if not admin_token:
+            return False
+        value = request.cookies.get(admin_cookie_name, "")
+        try:
+            issued, signature = value.split(".", 1)
+            age = int(time.time()) - int(issued)
+        except (TypeError, ValueError):
+            return False
+        expected = hmac.new(admin_token.encode("utf-8"), issued.encode("ascii"), hashlib.sha256).hexdigest()
+        return 0 <= age <= 8 * 60 * 60 and hmac.compare_digest(signature, expected)
 
     def supplied_admin_token():
         supplied = request.headers.get("X-MockTC-Admin-Token", "").strip()
@@ -609,13 +640,37 @@ def create_app():
         if not admin_token:
             return api_err(503, "MockTC 管理写入功能尚未配置管理员令牌")
         supplied = supplied_admin_token()
+        if not valid_admin_cookie() and (not supplied or not hmac.compare_digest(supplied, admin_token)):
+            return api_err(403, "管理员授权已失效，请在维护窗口重新授权")
+        return None
+
+    @app.route(API_PREFIX + "/admin/session", methods=["POST"])
+    def create_admin_session():
+        if not admin_token:
+            return api_err(503, "MockTC 管理写入功能尚未配置管理员令牌")
+        supplied = str((request.get_json(silent=True) or {}).get("token") or "").strip()
         if not supplied or not hmac.compare_digest(supplied, admin_token):
             return api_err(403, "管理员令牌无效")
-        return None
+        response = jsonify({"status": 200, "message": "管理员授权成功", "data": {"expires_in": 28800}})
+        response.set_cookie(admin_cookie_name, admin_cookie_value(), max_age=28800,
+                            httponly=True, secure=True, samesite="Strict", path="/")
+        return response
+
+    def record_change(action, target_type, target_id, before=None, after=None, backup=""):
+        db = get_db()
+        db.execute(
+            "INSERT INTO change_history(ts,action,target_type,target_id,before_json,after_json,backup,client_ip) "
+            "VALUES(?,?,?,?,?,?,?,?)",
+            (now_iso(), action, target_type, str(target_id),
+             json.dumps(before or {}, ensure_ascii=False, default=str),
+             json.dumps(after or {}, ensure_ascii=False, default=str),
+             str(backup or ""), request.remote_addr or ""),
+        )
+        db.commit()
 
     @app.before_request
     def check_token():
-        if not token or not request.path.startswith(API_PREFIX):
+        if not token or not request.path.startswith(API_PREFIX) or request.path == API_PREFIX + "/admin/session":
             return None
         supplied = request.headers.get("Authorization", "")
         if supplied.startswith("Bearer "):
@@ -774,6 +829,7 @@ def create_app():
         )
         db.commit()
         row = item_row(uid)
+        record_change("create", "item", uid, after=dict(row))
         return jsonify(
             {
                 "status": 201,
@@ -797,6 +853,7 @@ def create_app():
         row = item_row(uid)
         if row is None:
             return api_err(404, "Item not found: " + uid)
+        before = dict(row)
         payload = request.get_json(silent=True) or {}
         allowed = ("item_id", "item_name", "item_type", "project", "owner", "status")
         updates = {key: str(payload[key]).strip() for key in allowed if key in payload}
@@ -816,7 +873,9 @@ def create_app():
         except sqlite3.IntegrityError:
             get_db().rollback()
             return api_err(409, "item_id 已存在")
-        return api_ok(serialize_item(item_row(uid)))
+        after = item_row(uid)
+        record_change("update", "item", uid, before=before, after=dict(after))
+        return api_ok(serialize_item(after))
 
     @app.route(API_PREFIX + "/items/<uid>/revisions", methods=["GET"])
     def list_revisions(uid):
@@ -921,6 +980,7 @@ def create_app():
         row = get_db().execute("SELECT * FROM bom_lines WHERE uid=?", (uid,)).fetchone()
         if row is None:
             return api_err(404, "BOM line not found: " + uid)
+        before = dict(row)
         payload = request.get_json(silent=True) or {}
         allowed = ("position", "sequence", "quantity", "unit", "child_item_uid", "notes")
         updates = {key: payload[key] for key in allowed if key in payload}
@@ -943,6 +1003,8 @@ def create_app():
             list(updates.values()) + [uid],
         )
         get_db().commit()
+        after = get_db().execute("SELECT * FROM bom_lines WHERE uid=?", (uid,)).fetchone()
+        record_change("update", "bomline", uid, before=before, after=dict(after))
         return get_bomline(uid)
 
     @app.route(API_PREFIX + "/items/<uid>/bomlines", methods=["POST"])
@@ -985,6 +1047,8 @@ def create_app():
              str(payload.get("unit") or "EA"), child_uid, str(payload.get("notes") or "")),
         )
         db.commit()
+        created = db.execute("SELECT * FROM bom_lines WHERE uid=?", (line_uid,)).fetchone()
+        record_change("create", "bomline", line_uid, after=dict(created))
         response = get_bomline(line_uid)
         if isinstance(response, tuple):
             response[0].status_code = 201
@@ -1000,9 +1064,11 @@ def create_app():
         row = get_db().execute("SELECT * FROM bom_lines WHERE uid=?", (uid,)).fetchone()
         if row is None:
             return api_err(404, "BOM line not found: " + uid)
-        backup_database()
+        before = dict(row)
+        backup = backup_database()
         get_db().execute("DELETE FROM bom_lines WHERE uid=?", (uid,))
         get_db().commit()
+        record_change("delete", "bomline", uid, before=before, backup=backup)
         return api_ok({"deleted": uid})
 
     @app.route(API_PREFIX + "/bomlines/<uid>/children", methods=["GET"])
@@ -1232,11 +1298,14 @@ def create_app():
             target = next((row for row in rows if str(row.get("child_uid") or "") == child_uid), None)
             if target is None:
                 return api_err(404, "BOM row not found: " + child_uid)
+            before = dict(target)
             target.update(updates)
             try:
                 backup = persist_fixture(name, rows)
             except ValueError as exc:
                 return api_err(400, str(exc))
+        record_change("update", "fixture_row", "%s:%s" % (name, child_uid),
+                      before=before, after=target, backup=backup)
         return api_ok({"fixture": name, "updated": child_uid, "row": target, "backup": backup})
 
     @app.route(API_PREFIX + "/fixtures/<name>/rows", methods=["POST"])
@@ -1281,6 +1350,8 @@ def create_app():
                 backup = persist_fixture(name, rows)
             except ValueError as exc:
                 return api_err(400, str(exc))
+        record_change("create", "fixture_row", "%s:%s" % (name, child_uid),
+                      after=row, backup=backup)
         return jsonify({"status": 201, "message": "BOM row created", "data": {
             "fixture": name, "row": row, "backup": backup,
         }}), 201
@@ -1317,6 +1388,9 @@ def create_app():
                 backup = persist_fixture(name, kept)
             except ValueError as exc:
                 return api_err(400, str(exc))
+        deleted_rows = [row for row in rows if str(row.get("child_uid") or "") in descendants]
+        record_change("delete", "fixture_row", "%s:%s" % (name, child_uid),
+                      before={"rows": deleted_rows}, backup=backup)
         return api_ok({"fixture": name, "deleted": sorted(descendants), "backup": backup})
 
     # -------------------------------------------------------------- UI pages
@@ -1403,6 +1477,13 @@ def create_app():
     @app.route("/logs")
     def logs_page():
         return render_template("logs.html", service=SERVICE_NAME)
+
+    @app.route("/changes")
+    def changes_page():
+        rows = get_db().execute(
+            "SELECT * FROM change_history ORDER BY id DESC LIMIT 500"
+        ).fetchall()
+        return render_template("changes.html", service=SERVICE_NAME, rows=rows)
 
     @app.route("/logs/table")
     def logs_table():

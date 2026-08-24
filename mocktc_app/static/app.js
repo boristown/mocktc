@@ -12,25 +12,31 @@
   }
 
   function tokenFrom(input) {
-    var value = (input && input.value || "").trim() || sessionStorage.getItem("mocktc-admin-token") || "";
-    if (value) {
-      sessionStorage.setItem("mocktc-admin-token", value);
-      if (input) input.value = value;
-    }
-    return value;
+    return (input && input.value || "").trim();
   }
 
   function apiRequest(path, options, tokenInput) {
     options = options || {};
     var token = tokenFrom(tokenInput);
-    if (!token) return Promise.reject(new Error("请输入管理员令牌"));
-    options.headers = Object.assign({"Content-Type": "application/json", "X-MockTC-Admin-Token": token}, options.headers || {});
-    return fetch(path, options).then(function (response) {
+    options.credentials = "same-origin";
+    options.headers = Object.assign({"Content-Type": "application/json"}, options.headers || {});
+    var authorize = token ? fetch("/tc/v1/admin/session", {
+      method: "POST", credentials: "same-origin", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({token: token})
+    }).then(parseResponse) : Promise.resolve();
+    return authorize.then(function () {
+      if (tokenInput) tokenInput.value = "";
+      return fetch(path, options);
+    }).then(function (response) {
+      return parseResponse(response);
+    });
+  }
+
+  function parseResponse(response) {
       return response.json().catch(function () { return {}; }).then(function (body) {
         if (!response.ok || Number(body.status || response.status) >= 400) throw new Error(body.message || "请求失败（HTTP " + response.status + "）");
         return body;
       });
-    });
   }
 
   document.addEventListener("click", function (event) {

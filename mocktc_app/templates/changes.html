@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}变更历史{% endblock %}
+{% block content %}
+<section class="panel">
+  <div class="section-head"><div><h2>MockTC 变更历史</h2><p>新增、修改和删除操作均在服务端留痕，最近记录优先显示。</p></div></div>
+  <div class="table-scroll">
+    <table class="table logs">
+      <thead><tr><th>时间</th><th>动作</th><th>对象</th><th>标识</th><th>变更前</th><th>变更后</th><th>备份</th><th>来源</th></tr></thead>
+      <tbody>
+      {% for row in rows %}
+        <tr><td class="nowrap">{{ row.ts }}</td><td>{{ row.action }}</td><td>{{ row.target_type }}</td><td><code>{{ row.target_id }}</code></td><td><details><summary>查看</summary><pre>{{ row.before_json }}</pre></details></td><td><details><summary>查看</summary><pre>{{ row.after_json }}</pre></details></td><td><code>{{ row.backup or '-' }}</code></td><td>{{ row.client_ip }}</td></tr>
+      {% else %}<tr><td colspan="8" class="empty">暂无变更记录</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
