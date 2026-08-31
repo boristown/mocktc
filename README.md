@@ -212,6 +212,13 @@ bash /oracle/mocktc/scripts/deploy.sh
 ```
 mocktc_app/          Flask 应用（app.py + templates/ + static/）
 systemd/             mocktc.service、frpc-mocktc.service
+
+## 内网受保护构建
+
+客户离线介质使用 `scripts/build-protected-release.sh OUTPUT_DIR` 生成本机可执行发行目录。
+交付物不包含 Python 源码或源码映射；模板、静态资源和两组基准 fixture 随发行包提供，
+首次启动复制到外部持久化目录 `/var/lib/xiaogang/mocktc/fixtures`。SQLite 数据库、变更
+历史、管理员令牌和运行日志不写入镜像，应用镜像升级不会覆盖既有 MockTC 数据。
 scripts/             deploy.sh、upload_and_deploy.py、FRP/nginx 配置
 tests/               unittest 接口测试
 ```
