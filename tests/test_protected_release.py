@@ -17,6 +17,9 @@ class ProtectedMockTCReleaseTests(unittest.TestCase):
         self.assertIn("/var/lib/xiaogang/mocktc/fixtures", launcher)
         self.assertIn("MOCKTC_FIXTURE_DIR", launcher)
         self.assertIn("xg-mocktc", builder)
+        self.assertIn("xg-mocktc-fixture-sync", builder)
+        self.assertIn("sync_production_fixtures.py", builder)
+        self.assertIn('"${OUTPUT_DIR}/maintenance/mocktc-fixture-sync"', builder)
         for suffix in ("*.py", "*.pyc", "*.pyo", "*.map"):
             self.assertIn(suffix, builder)
         self.assertNotIn("mocktc.db", builder)

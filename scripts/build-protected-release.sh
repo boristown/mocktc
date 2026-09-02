@@ -13,6 +13,8 @@ rm -rf "${OUTPUT_DIR}" "${BUILD_DIR}"
 mkdir -p "${OUTPUT_DIR}" "${BUILD_DIR}/source/mocktc_app"
 cp "${ROOT}/mocktc_app/app.py" "${BUILD_DIR}/source/mocktc_app/app.py"
 cp "${ROOT}/deployment/protected_launcher.py" "${BUILD_DIR}/source/protected_launcher.py"
+cp "${ROOT}/scripts/sync_production_fixtures.py" \
+  "${BUILD_DIR}/source/sync_production_fixtures.py"
 cp -a "${ROOT}/mocktc_app/templates" "${ROOT}/mocktc_app/static" \
   "${ROOT}/mocktc_app/fixtures" "${BUILD_DIR}/source/mocktc_app/"
 
@@ -26,6 +28,18 @@ cp -a "${ROOT}/mocktc_app/templates" "${ROOT}/mocktc_app/static" \
   "${BUILD_DIR}/source/protected_launcher.py")
 
 mv "${BUILD_DIR}/protected_launcher.dist" "${OUTPUT_DIR}/runtime"
+# The fixture synchronizer is an operator-only maintenance utility.  Build it
+# as a separate native bundle so the air-gapped delivery medium can carry the
+# precise, reviewable sync contract without exposing its Python source.
+(cd "${BUILD_DIR}/source" && PYTHONPATH="${BUILD_DIR}/source" "${PYTHON_BIN}" -m nuitka \
+  --standalone --assume-yes-for-downloads --remove-output \
+  --output-dir="${BUILD_DIR}" --output-filename=xg-mocktc-fixture-sync \
+  sync_production_fixtures.py)
+mkdir -p "${OUTPUT_DIR}/maintenance"
+mv "${BUILD_DIR}/sync_production_fixtures.dist" \
+  "${OUTPUT_DIR}/maintenance/mocktc-fixture-sync"
+test -x "${OUTPUT_DIR}/maintenance/mocktc-fixture-sync/xg-mocktc-fixture-sync" \
+  || { echo "protected MockTC fixture synchronizer build failed" >&2; exit 1; }
 find "${OUTPUT_DIR}" -type f \( -name '*.py' -o -name '*.pyc' -o -name '*.pyo' -o -name '*.map' \) \
   -print -quit | grep -q . \
   && { echo "protected MockTC release contains source artifacts" >&2; exit 1; } || true
