@@ -40,6 +40,7 @@
       <tr><td><span class="m m-get">GET</span></td><td><code>{{ api_prefix }}/fixtures/&lt;name&gt;/materials/&lt;part_id&gt;</code></td><td>物料详情（只读，不存在 404）</td><td>-</td></tr>
       <tr><td><span class="m m-get">GET</span></td><td><code>{{ api_prefix }}/export.xlsx</code></td><td>一键下载全部MockTC数据（Excel）</td><td>-</td></tr>
       <tr><td><span class="m m-get">GET</span></td><td><code>{{ api_prefix }}/fixtures/&lt;name&gt;/download</code></td><td>下载单个外部BOM原始JSON</td><td>-</td></tr>
+      <tr><td><span class="m m-post">POST</span></td><td><code>{{ api_prefix }}/fixtures/import</code></td><td>导入全新外部 BOM 数据集（管理员）</td><td>multipart file, name（同名 409）</td></tr>
       <tr><td><span class="m m-patch">PATCH</span></td><td><code>{{ api_prefix }}/fixtures/&lt;name&gt;/rows/&lt;child_uid&gt;</code></td><td>修改外部 BOM 节点（管理员）</td><td>JSON 字段</td></tr>
       <tr><td><span class="m m-post">POST</span></td><td><code>{{ api_prefix }}/fixtures/&lt;name&gt;/rows</code></td><td>新增外部 BOM 子节点（管理员）</td><td>parent_uid, part_id, quantity...</td></tr>
       <tr><td><span class="m m-delete">DELETE</span></td><td><code>{{ api_prefix }}/fixtures/&lt;name&gt;/rows/&lt;child_uid&gt;</code></td><td>删除外部 BOM 节点（管理员）</td><td>cascade=1</td></tr>

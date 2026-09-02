@@ -158,6 +158,9 @@ main.container { padding-top: 26px; padding-bottom: 60px; }
 .nowrap { white-space: nowrap; }
 .q { color: var(--muted); font-size: 11.5px; font-family: var(--mono); word-break: break-all; }
 .empty { text-align: center; color: var(--muted); padding: 26px !important; }
+.fixture-import-form { display: flex; align-items: end; gap: 12px; flex-wrap: wrap; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); }
+.fixture-import-form label { display: flex; flex-direction: column; gap: 5px; color: var(--muted); font-size: 12px; }
+.fixture-import-form input { min-width: 260px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px; background: #fff; color: var(--text); }
 
 /* method / status badges */
 .m {

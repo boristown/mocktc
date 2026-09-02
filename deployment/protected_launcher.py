@@ -16,9 +16,20 @@ def prepare_persistent_fixtures():
     target.mkdir(parents=True, exist_ok=True)
     if not bundled.is_dir():
         raise RuntimeError("bundled MockTC fixtures are unavailable")
+    marker = target / ".bundled-fixtures-initialized"
+    if marker.exists():
+        return
+    database = Path(os.environ.get("MOCKTC_DB_PATH") or target.parent / "mocktc.db")
+    # 只在全新数据目录首次初始化。已有数据库或 fixture 状态说明
+    # 这是持久化实例；此时缺失文件可能是管理员有意删除，不得从镜像复活。
+    established = database.exists() or any(target.iterdir())
+    if established:
+        marker.touch(mode=0o600, exist_ok=True)
+        return
     for source in bundled.iterdir():
         if source.is_file() and not (target / source.name).exists():
             shutil.copyfile(source, target / source.name)
+    marker.touch(mode=0o600, exist_ok=True)
 
 
 class MockTCApplication(BaseApplication):

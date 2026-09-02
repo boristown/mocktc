@@ -14,6 +14,7 @@ Runs on Python 3.6+ / Flask 2.0+.
 import json
 import hmac
 import hashlib
+import math
 import os
 import re
 import shutil
@@ -34,7 +35,7 @@ from flask import Flask, Response, g, jsonify, render_template, request, send_fi
 
 
 SERVICE_NAME = "Mock Teamcenter"
-SERVICE_VERSION = "1.2.0"
+SERVICE_VERSION = "1.3.0"
 API_PREFIX = "/tc/v1"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -44,6 +45,9 @@ FIXTURE_DIR = os.environ.get("MOCKTC_FIXTURE_DIR", os.path.join(BASE_DIR, "fixtu
 FIXTURE_BOM_FILENAME = "20260808-bom1-2.json"
 FIXTURE_ITEM_UID = "item-litho-001"
 MAX_LOG_BODY = 5000  # characters stored per request/response body
+MAX_FIXTURE_ROWS = 20000
+MAX_FIXTURE_FIELDS = 64
+MAX_FIXTURE_FIELD_LENGTH = 4096
 
 
 def create_app():
@@ -365,7 +369,11 @@ def create_app():
             part_id = str(row.get("part_id") or "").strip()
             if not child_uid or not part_id:
                 raise ValueError("第 %d 行 child_uid 和 part_id 不能为空" % (index + 1))
+            if len(child_uid) > 256 or len(part_id) > 256:
+                raise ValueError("第 %d 行 child_uid 或 part_id 过长" % (index + 1))
             try:
+                if isinstance(row.get("bom_level", 0), bool):
+                    raise ValueError
                 level = int(row.get("bom_level", 0))
             except (TypeError, ValueError):
                 raise ValueError("第 %d 行 bom_level 必须为非负整数" % (index + 1))
@@ -388,6 +396,60 @@ def create_app():
                 raise ValueError("第 %d 行 parent_uid 不存在或指向自身" % (index + 1))
         if roots != 1:
             raise ValueError("BOM 必须且只能有一个根节点")
+
+    def validate_import_rows(rows):
+        """严格校验外部导入，同时保留合法的自定义标量字段。"""
+        if not isinstance(rows, list):
+            raise ValueError("BOM JSON 顶层必须是数组")
+        if len(rows) > MAX_FIXTURE_ROWS:
+            raise ValueError("BOM 数据不能超过 %d 行" % MAX_FIXTURE_ROWS)
+        validate_fixture_rows(rows)
+        known = {str(row.get("child_uid") or "").strip(): row for row in rows}
+        field_name_re = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]{0,63}$")
+        for index, row in enumerate(rows):
+            if len(row) > MAX_FIXTURE_FIELDS:
+                raise ValueError("第 %d 行字段数超过 %d" % (index + 1, MAX_FIXTURE_FIELDS))
+            for key, value in row.items():
+                if not isinstance(key, str) or not field_name_re.match(key):
+                    raise ValueError("第 %d 行包含非法字段名" % (index + 1))
+                if isinstance(value, (dict, list)):
+                    raise ValueError("第 %d 行字段只接受标量值" % (index + 1))
+                if isinstance(value, float) and not math.isfinite(value):
+                    raise ValueError("第 %d 行字段 %s 必须是有限数" % (index + 1, key))
+                if isinstance(value, str) and len(value) > MAX_FIXTURE_FIELD_LENGTH:
+                    raise ValueError("第 %d 行字段 %s 过长" % (index + 1, key))
+            if "quantity" in row and str(row.get("quantity") or "").strip():
+                try:
+                    quantity = float(row["quantity"])
+                    if not math.isfinite(quantity) or quantity <= 0:
+                        raise ValueError
+                except (TypeError, ValueError):
+                    raise ValueError("第 %d 行 quantity 必须是大于 0 的有限数" % (index + 1))
+            parent_uid = str(row.get("parent_uid") or "").strip()
+            if parent_uid:
+                parent_level = int(known[parent_uid].get("bom_level") or 0)
+                if int(row["bom_level"]) != parent_level + 1:
+                    raise ValueError("第 %d 行 bom_level 必须比父节点大 1" % (index + 1))
+
+    def create_fixture_exclusive(name, rows):
+        """同目录原子新建 fixture；硬链提交保证同名时绝不覆盖。"""
+        validate_import_rows(rows)
+        path = os.path.join(FIXTURE_DIR, name)
+        temp_path = "%s.import.%s" % (path, uuid.uuid4().hex)
+        try:
+            with open(temp_path, "x", encoding="utf-8") as handle:
+                json.dump(rows, handle, ensure_ascii=False, indent=1)
+                handle.write("\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.chmod(temp_path, 0o644)
+            try:
+                os.link(temp_path, path)
+            except FileExistsError:
+                raise FileExistsError("同名 BOM 数据集已存在")
+        finally:
+            if os.path.exists(temp_path):
+                os.unlink(temp_path)
 
     def persist_fixture(name, rows):
         validate_fixture_rows(rows)
@@ -1149,6 +1211,48 @@ def create_app():
         response.headers["Content-Disposition"] = 'attachment; filename="%s"' % name
         response.headers["X-Content-Type-Options"] = "nosniff"
         return response
+
+    @app.route(API_PREFIX + "/fixtures/import", methods=["POST"])
+    def import_fixture_file():
+        denied = require_admin()
+        if denied is not None:
+            return denied
+        uploaded = request.files.get("file")
+        if uploaded is None or not uploaded.filename:
+            return api_err(400, "请选择 BOM JSON 文件")
+        name = str(request.form.get("name") or uploaded.filename or "").strip()
+        if len(name) > 128 or not fixture_name_ok(name) or not name.lower().endswith(".json"):
+            return api_err(400, "数据集名称必须是有效的 .json 文件名，不得包含路径")
+        raw = uploaded.read(app.config["MAX_CONTENT_LENGTH"] + 1)
+        if not raw:
+            return api_err(400, "BOM JSON 文件不能为空")
+        if len(raw) > app.config["MAX_CONTENT_LENGTH"]:
+            return api_err(413, "BOM JSON 文件超过 2 MiB 限制")
+        try:
+            text = raw.decode("utf-8-sig")
+            rows = json.loads(text)
+            validate_import_rows(rows)
+        except UnicodeDecodeError:
+            return api_err(400, "BOM JSON 必须使用 UTF-8 编码")
+        except (ValueError, TypeError) as exc:
+            return api_err(400, str(exc))
+        with fixture_write_lock():
+            if os.path.lexists(os.path.join(FIXTURE_DIR, name)):
+                return api_err(409, "同名 BOM 数据集已存在，导入不会覆盖已有数据")
+            try:
+                create_fixture_exclusive(name, rows)
+            except FileExistsError as exc:
+                return api_err(409, str(exc))
+            except ValueError as exc:
+                return api_err(400, str(exc))
+        root = next(row for row in rows if not str(row.get("parent_uid") or "").strip())
+        summary = {
+            "name": name, "rows": len(rows),
+            "item_id": str(root.get("part_id") or ""),
+            "part_name": str(root.get("part_name") or ""),
+        }
+        record_change("import", "fixture", name, after=summary)
+        return jsonify({"status": 201, "message": "BOM 数据集已导入", "data": summary}), 201
 
     @app.route(API_PREFIX + "/export.xlsx", methods=["GET"])
     def export_all_data_xlsx():

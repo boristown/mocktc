@@ -177,6 +177,36 @@ class MockTcMaintenanceTestCase(unittest.TestCase):
         self.assertIn('attachment; filename="editable.json"', downloaded.headers["Content-Disposition"])
         self.assertEqual(json.loads(downloaded.data), self.rows)
 
+    def test_fixture_import_requires_admin_validates_and_never_overwrites(self):
+        imported_rows = [
+            {"bom_level": 0, "parent_uid": "", "child_uid": "NEW-ROOT", "part_id": "NEW-1", "part_name": "新总成", "quantity": "1", "unit": "EA"},
+            {"bom_level": 1, "parent_uid": "NEW-ROOT", "child_uid": "NEW-CHILD", "part_id": "NEW-PART", "part_name": "新子件", "quantity": "2", "unit": "EA"},
+        ]
+        upload = lambda rows, name="new-bom.json", headers=None: self.client.post(
+            "/tc/v1/fixtures/import", headers=headers or {},
+            data={"name": name, "file": (BytesIO(json.dumps(rows, ensure_ascii=False).encode("utf-8")), "upload.json")},
+            content_type="multipart/form-data",
+        )
+        self.assertEqual(upload(imported_rows).status_code, 403)
+        created = upload(imported_rows, headers=self.headers)
+        self.assertEqual(created.status_code, 201, created.get_data(as_text=True))
+        self.assertEqual(self.body(created)["data"]["rows"], 2)
+        readback = self.body(self.client.get("/tc/v1/fixtures/new-bom.json"))
+        self.assertEqual(readback["data"]["items"], imported_rows)
+        with open(os.path.join(self.fixture_dir, "new-bom.json"), "rb") as handle:
+            original = handle.read()
+        conflict = upload([imported_rows[0]], headers=self.headers)
+        self.assertEqual(conflict.status_code, 409)
+        with open(os.path.join(self.fixture_dir, "new-bom.json"), "rb") as handle:
+            self.assertEqual(handle.read(), original)
+
+        traversal = upload(imported_rows, name="../escape.json", headers=self.headers)
+        self.assertEqual(traversal.status_code, 400)
+        bad_tree = [dict(imported_rows[0]), dict(imported_rows[1], bom_level=3)]
+        self.assertEqual(upload(bad_tree, name="bad.json", headers=self.headers).status_code, 400)
+        non_finite = [dict(imported_rows[0], quantity=float("nan"))]
+        self.assertEqual(upload(non_finite, name="nan.json", headers=self.headers).status_code, 400)
+
 
 if __name__ == "__main__":
     unittest.main()

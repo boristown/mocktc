@@ -23,6 +23,17 @@
     <p>暂无外部 BOM 数据集。</p>
     {% endfor %}
   </div>
+  {% if editable %}
+  <form id="fixture-import-form" class="fixture-import-form">
+    <label>导入新 BOM JSON（同名数据集绝不覆盖）
+      <input id="fixture-import-file" name="file" type="file" accept="application/json,.json" required>
+    </label>
+    <label>数据集名称（可选）
+      <input id="fixture-import-name" name="name" maxlength="128" placeholder="默认使用上传文件名">
+    </label>
+    <button class="btn" type="submit">导入为新数据集</button>
+  </form>
+  {% endif %}
 </section>
 
 <section class="panel">

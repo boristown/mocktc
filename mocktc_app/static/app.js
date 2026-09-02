@@ -27,6 +27,21 @@
       });
   }
 
+  var fixtureImportForm = document.getElementById("fixture-import-form");
+  if (fixtureImportForm) fixtureImportForm.addEventListener("submit", function (event) {
+    event.preventDefault();
+    var fileInput = document.getElementById("fixture-import-file");
+    if (!fileInput || !fileInput.files || !fileInput.files[0]) return toast("请选择 BOM JSON 文件", true);
+    var body = new FormData();
+    body.append("file", fileInput.files[0]);
+    var name = String((document.getElementById("fixture-import-name") || {}).value || "").trim();
+    if (name) body.append("name", name);
+    fetch("/tc/v1/fixtures/import", {method: "POST", body: body, credentials: "same-origin"})
+      .then(parseResponse)
+      .then(function () { toast("BOM 数据集已安全导入"); window.setTimeout(function () { location.reload(); }, 450); })
+      .catch(function (error) { toast(error.message, true); });
+  });
+
   document.addEventListener("click", function (event) {
     var btn = event.target.closest(".toggle-body");
     if (!btn) return;

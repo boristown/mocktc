@@ -40,6 +40,7 @@
 | GET | `/tc/v1/fixtures/<name>/materials/<part_id>` | 只读：物料详情（不存在返回 404） |
 | GET | `/tc/v1/export.xlsx` | 下载全部MockTC数据的Excel工作簿 |
 | GET | `/tc/v1/fixtures/<name>/download` | 下载单个fixture原始JSON |
+| POST | `/tc/v1/fixtures/import` | 管理：导入新 BOM JSON 数据集（multipart `file`/`name`，同名拒绝覆盖） |
 | PATCH | `/tc/v1/fixtures/<name>/rows/<child_uid>` | 管理：修改 fixture BOM 节点 |
 | POST | `/tc/v1/fixtures/<name>/rows` | 管理：新增 fixture BOM 子节点 |
 | DELETE | `/tc/v1/fixtures/<name>/rows/<child_uid>` | 管理：删除节点；有下级时须 `cascade=1` |
@@ -52,7 +53,9 @@
 打开 `https://mocktc.bjlzc.cn/data` 可查看标准 BOM 和所有外部 fixture。外部数据集
 支持任意字段搜索、分页、编辑、新增下级和级联删除；标准 BOM 详情页支持组件增删改。
 页面顶部的“一键下载全部数据”会生成一个包含导出说明、物料清单、标准 BOM 以及每个
-外部 BOM 数据集独立工作表的 `.xlsx` 文件。
+外部 BOM 数据集独立工作表的 `.xlsx` 文件。维护页还可导入 UTF-8 JSON
+数组为全新数据集；同名时返回 409，不提供覆盖开关。导入限制为 2 MiB、
+20000 行，并校验唯一根节点、唯一 `child_uid`、父子层级和标量字段。
 
 所有写操作都必须通过请求头 `X-MockTC-Admin-Token` 提交管理员令牌。服务从
 `MOCKTC_ADMIN_TOKEN` 环境变量读取真实值；ECC 运行环境将其保存在权限为 `0600` 的
@@ -217,8 +220,10 @@ systemd/             mocktc.service、frpc-mocktc.service
 
 客户离线介质使用 `scripts/build-protected-release.sh OUTPUT_DIR` 生成本机可执行发行目录。
 交付物不包含 Python 源码或源码映射；模板、静态资源和两组基准 fixture 随发行包提供，
-首次启动复制到外部持久化目录 `/var/lib/xiaogang/mocktc/fixtures`。SQLite 数据库、变更
-历史、管理员令牌和运行日志不写入镜像，应用镜像升级不会覆盖既有 MockTC 数据。
+仅在全新数据目录的首次启动复制到外部持久化目录
+`/var/lib/xiaogang/mocktc/fixtures`，并写入初始化标记。SQLite 数据库、变更历史、管理员
+令牌和运行日志不写入镜像；已有数据库或 fixture 状态时不再回填内置文件，因此
+重启和镜像升级不会复活管理员已删除的数据。
 scripts/             deploy.sh、upload_and_deploy.py、FRP/nginx 配置
 tests/               unittest 接口测试
 ```
