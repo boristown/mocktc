@@ -66,6 +66,29 @@ fixture 修改前会在 `fixtures/.history/` 自动创建原始文件快照，�
 替换落盘；SQLite 标准 BOM 修改前会在 `data/.history/` 创建数据库快照。因此页面编辑
 失败不会留下半写文件，历史版本也可用于人工回退。
 
+### 正式环境 fixture 对拍与显式同步
+
+`scripts/sync_production_fixtures.py` 仅处理外部 JSON fixture，不会同步 SQLite
+标准物料/BOM。默认是只读对拍：读取正式 MockTC 的 fixture 清单和原始 JSON，输出
+生产与麒麟的行数、哈希和状态，不创建文件、不写审计记录。
+
+```sh
+python3.11 scripts/sync_production_fixtures.py \
+  --target-dir /var/lib/xiaogang/mocktc/fixtures
+```
+
+替换必须由运维人员明确指定**一个** fixture，且必须提供替换前目标文件的 SHA-256；新建
+fixture 时只接受 `NAME=absent`。程序以与服务相同的 `.mocktc-fixtures.lock` 加锁，
+先将旧文件保存到 `.history/`，再同目录原子替换，并在 `.sync-history/` 写入不含令牌
+的审计 manifest。没有“同步全部”或自动覆盖开关。
+
+```sh
+python3.11 scripts/sync_production_fixtures.py \
+  --target-dir /var/lib/xiaogang/mocktc/fixtures --apply \
+  --fixture 20260810-sap-alignment-diff-G100000013.json \
+  --expect-target-sha 20260810-sap-alignment-diff-G100000013.json=<对拍报告中的目标SHA256>
+```
+
 ### 外部 BOM 数据（LITHO-001）
 
 物料 `LITHO-001`（光刻机整机）的 BOM 接口直接返回外部上传文件
